@@ -46,7 +46,29 @@ p, h1-h9, ul, ol, li, table, thead, tbody, tr, th, td, blockquote, pre, code, hr
 - `<task>` — `<task task-id="GUID"></task>`，必传 task-id（任务 guid）
 - `<chat_card>` — `<chat_card chat-id="CHAT_ID"></chat_card>`，必传 chat-id
 - `<sub-page-list>` — `<sub-page-list></sub-page-list>` 子页面列表块；仅 wiki 文档可插入
+- `<html5-block>` — 在飞书文档「HTML 块」iframe 里加载的单文件 HTML。
 - bitable、base_ref、synced_reference、synced_source、okr — 不可创建，仅支持移动
+
+## html
+
+1. 写入 HTML 内容块时，把 HTML 存为本地 `.html` 文件，XML 写 `<html5-block path="@widget.html"></html5-block>`；已有 `data-ref` 时配合 `--reference-map @reference-map.json`。读取时 `<html5-block data-ref="html5_1"></html5-block>` 只是占位，必须从 `document.reference_map["html5-block"]["html5_1"].data` 读取 HTML；若 entry 是 `path`，读取对应 `@doc-fetch-resources/...html` 文件。
+2. 格式如下：
+```html
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="use-iframe" content="true">
+  <meta name="html-box-height-mode" content="auto">
+  <meta name="description" content="内容摘要，会导出为 html5-block 的 alt 属性，帮助模型理解该 HTML 块的用途">
+  <title></title>
+</head>
+<body>
+  ...
+</body>
+</html>
+```
 
 # 四、块级复制与移动
 
