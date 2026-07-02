@@ -3,7 +3,10 @@
 
 package sheets
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUndo_DryRun(t *testing.T) {
 	t.Parallel()
@@ -18,14 +21,15 @@ func TestUndo_DryRun(t *testing.T) {
 	got := decodeToolInput(t, body, "undo_last")
 	assertInputEquals(t, got, map[string]interface{}{
 		"excel_id": testToken,
+		"count":    float64(1),
 	})
 }
 
 func TestExecute_Undo(t *testing.T) {
 	t.Parallel()
 
-	stub := toolOutputStub(testToken, "write", `{"undone":1,"op_id":"op-1","top_doc_revision":2,"new_revision":3}`)
-	out, err := runShortcutWithStubs(t, Undo, []string{"--url", testURL, "--as", "user"}, stub)
+	stub := toolOutputStub(testToken, "write", `{"undone":3,"op_ids":["op-3","op-2","op-1"],"results":[{"op_id":"op-3"},{"op_id":"op-2"},{"op_id":"op-1"}]}`)
+	out, err := runShortcutWithStubs(t, Undo, []string{"--url", testURL, "--count", "3", "--as", "user"}, stub)
 	if err != nil {
 		t.Fatalf("execute failed: %v\nout=%s", err, out)
 	}
@@ -34,10 +38,23 @@ func TestExecute_Undo(t *testing.T) {
 	input := decodeToolInput(t, body, "undo_last")
 	assertInputEquals(t, input, map[string]interface{}{
 		"excel_id": testToken,
+		"count":    float64(3),
 	})
 
 	data := decodeEnvelopeData(t, out)
-	if data["undone"].(float64) != 1 || data["op_id"] != "op-1" {
+	if data["undone"].(float64) != 3 {
 		t.Fatalf("unexpected output data: %#v", data)
+	}
+}
+
+func TestUndo_ValidateCount(t *testing.T) {
+	t.Parallel()
+
+	_, err := runShortcutWithStubs(t, Undo, []string{"--url", testURL, "--count", "21", "--as", "user"})
+	if err == nil {
+		t.Fatal("expected count validation error")
+	}
+	if !strings.Contains(err.Error(), "--count must be between 1 and 20") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

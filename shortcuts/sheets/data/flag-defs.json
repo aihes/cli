@@ -80,6 +80,32 @@
       }
     ]
   },
+  "+revision-get": {
+    "risk": "read",
+    "flags": [
+      {
+        "name": "url",
+        "kind": "public",
+        "type": "string",
+        "required": "xor",
+        "desc": "Spreadsheet locator"
+      },
+      {
+        "name": "spreadsheet-token",
+        "kind": "public",
+        "type": "string",
+        "required": "xor",
+        "desc": "Spreadsheet locator"
+      },
+      {
+        "name": "dry-run",
+        "kind": "system",
+        "type": "bool",
+        "required": "optional",
+        "desc": ""
+      }
+    ]
+  },
   "+sheet-create": {
     "risk": "write",
     "flags": [
@@ -4942,11 +4968,53 @@
         "desc": "Spreadsheet locator"
       },
       {
+        "name": "count",
+        "kind": "own",
+        "type": "int",
+        "required": "optional",
+        "desc": "Number of user undo stack entries to undo sequentially. Defaults to 1, maximum 20. Entries are undone from newest to oldest; the actual count is returned in undone.",
+        "default": "1"
+      },
+      {
         "name": "dry-run",
         "kind": "system",
         "type": "bool",
         "required": "optional",
         "desc": ""
+      }
+    ]
+  },
+  "+changeset-get": {
+    "risk": "read",
+    "flags": [
+      {
+        "name": "url",
+        "kind": "public",
+        "type": "string",
+        "required": "xor",
+        "desc": "Spreadsheet URL (XOR with `--spreadsheet-token`)"
+      },
+      {
+        "name": "spreadsheet-token",
+        "kind": "public",
+        "type": "string",
+        "required": "xor",
+        "desc": "Spreadsheet token (XOR with `--url`)"
+      },
+      {
+        "name": "start-revision",
+        "kind": "own",
+        "type": "int",
+        "required": "required",
+        "desc": "Start version (CS revision); the before baseline for review (must be >= 1)"
+      },
+      {
+        "name": "end-revision",
+        "kind": "own",
+        "type": "int",
+        "required": "optional",
+        "desc": "End version (CS revision); defaults to the latest revision. Gap (end-start+1) must be <= 20",
+        "default": "-1"
       }
     ]
   }

@@ -1000,6 +1000,7 @@ var flagDefs = map[string]commandDef{
 		Flags: []flagDef{
 			{Name: "url", Kind: "public", Type: "string", Required: "xor", Desc: "Spreadsheet locator"},
 			{Name: "spreadsheet-token", Kind: "public", Type: "string", Required: "xor", Desc: "Spreadsheet locator"},
+			{Name: "count", Kind: "own", Type: "int", Required: "optional", Desc: "Number of user undo stack entries to undo sequentially. Defaults to 1, maximum 20. Entries are undone from newest to oldest; the actual count is returned in undone.", Default: "1"},
 			{Name: "dry-run", Kind: "system", Type: "bool", Required: "optional"},
 		},
 	},
