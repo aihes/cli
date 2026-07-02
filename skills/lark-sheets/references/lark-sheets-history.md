@@ -6,19 +6,24 @@
 
 回滚（revert）把电子表格的当前内容覆盖回某个历史版本——这是一个**写入 / 不可逆**操作，且为**异步**：发起后立即返回受理标识，真正的回滚在后台进行，需通过状态查询轮询最终结果（进行中 / 成功 / 失败）。
 
-`+history-list` 读取版本列表以挑选目标；`+history-revert` 发起回滚；`+history-revert-status` 轮询回滚结果。若只是想拿**当前文档版本号（revision）**当作 recover / undo / `+changeset-get` 的起点锚点，直接用 `+revision-get` 更轻量。
+`+undo` 是另一类撤销：撤销当前 CLI 用户在该电子表格里最近一次由 AI 工具产生、且尚未撤销的写入。每个用户有独立 undo 栈；多人编辑同一篇文档时，只撤当前用户的栈顶，不撤其他用户的操作。它和历史版本回滚不同，不需要选择 `history_version_id`，也不是把整表恢复到某个历史快照。
+
+`+history-list` 读取版本列表以挑选目标；`+history-revert` 发起回滚；`+history-revert-status` 轮询回滚结果；`+undo` 撤销当前用户的最近一次 AI 工具写入。
 
 ## 使用场景
 
-读取历史版本、发起回滚、查询回滚状态。本 reference 覆盖 3 个 shortcut：
+读取历史版本、发起回滚、查询回滚状态，或撤销当前用户最近一次 AI 工具写入。本 reference 覆盖 4 个 shortcut：
 
 | 操作需求 | 使用工具 | 说明 |
 |---------|---------|------|
 | 查看历史版本列表 | `+history-list` | 返回 `minor_histories`，每条含 `history_version_id` / `create_time` / `action` / `all_block_revision` 四个字段；支持向前分页（可选 `--end-version`） |
 | 回滚到指定历史版本 | `+history-revert` | 传入 `--history-version-id`；异步受理，返回可查询标识 |
 | 查询回滚状态 | `+history-revert-status` | 传入 `--transaction-id`（取自 `+history-revert` 的异步受理标识）；轮询某次回滚的进行中 / 成功 / 失败状态 |
+| 撤销自己最近一次 AI 写入 | `+undo` | 只需 spreadsheet 定位；撤当前用户 undo 栈顶；支持普通单元格/结构写入，以及图表、透视表 update 的反向操作 |
 
 典型工作流：`+history-list` 拿到目标版本的 `history_version_id`（必要时翻页拉取更早历史）→ `+history-revert` 发起回滚并取回 `transaction_id` → `+history-revert-status --transaction-id <transaction_id>` 轮询直到成功或失败。
+
+`+undo` 的典型工作流更短：执行某个 AI 写入工具后，如果用户要求撤销刚才自己的修改，直接运行 `+undo`。返回 `undone=1` 表示已撤销一条当前用户栈顶；返回 `undone=0` 且 `reason=undo_stack_empty` 表示当前用户没有可撤销项。
 
 **注意事项（必须了解）**：
 - **回滚是写入 / 不可逆操作**：会用历史版本内容覆盖当前表格，发起前请确认目标 `history_version_id` 正确。
@@ -26,6 +31,9 @@
 - **`history_version_id` 与 `transaction_id` 不是同一个**：`history_version_id` 用于 `+history-revert`（取自 `+history-list`）；`transaction_id` 用于 `+history-revert-status`（取自 `+history-revert` 的输出）。
 - **历史是工作簿级**：定位只需 `--url` / `--spreadsheet-token`（XOR），不需要子表选择器。
 - **`+history-list` 倒序分页**：首次查省略 `--end-version`，返回最新一页；若响应里附带 `next_end_version` 与 `has_more=true`，把 `next_end_version` 作为下一次的 `--end-version` 即可继续向更早翻页；当响应**不包含**这两个字段时表示已到最早一页，不必再翻。
+- **`+undo` 是用户维度**：只撤当前登录用户的 undo 栈顶；同一文档里其他用户的写入不会被撤销。
+- **`+undo` 不区分 session / agent**：同一用户的不同 CLI 会话或 agent 共用同一个用户 undo 栈。
+- **`+undo` 不进入 `+batch-update`**：撤销本身依赖用户栈状态，不能作为批量子操作嵌套执行。
 
 ## Shortcuts
 
@@ -34,6 +42,7 @@
 | `+history-list` | read | 历史版本 |
 | `+history-revert` | write | 历史版本 |
 | `+history-revert-status` | read | 历史版本 |
+| `+undo` | write | 历史版本 |
 
 ## Flags
 
@@ -61,9 +70,15 @@ _公共：URL/token（无 sheet 定位） · 系统：`--dry-run`_
 | --- | --- | --- | --- |
 | `--transaction-id` | string | required | 异步回滚的受理标识（取自 +history-revert） |
 
+### `+undo`
+
+_公共：URL/token（无 sheet 定位） · 系统：`--dry-run`_
+
+_仅含公共 / 系统 flag。_
+
 ## Examples
 
-公共定位：所有 shortcut 顶部排列 `--url` / `--spreadsheet-token`（XOR，二选一）。`+history-revert` 用 `--history-version-id`（取自 `+history-list`）；`+history-revert-status` 用 `--transaction-id`（取自 `+history-revert` 的异步受理标识）。
+公共定位：所有 shortcut 顶部排列 `--url` / `--spreadsheet-token`（XOR，二选一）。`+history-revert` 用 `--history-version-id`（取自 `+history-list`）；`+history-revert-status` 用 `--transaction-id`（取自 `+history-revert` 的异步受理标识）。`+undo` 不需要 sheet-id，也不需要 history version。
 
 ### `+history-list`
 
@@ -90,4 +105,14 @@ lark-cli sheets +history-revert --url "https://sample.feishu.cn/sheets/SHTxxxxxx
 ```bash
 # 查询某次回滚的当前状态（进行中 / 成功 / 失败）
 lark-cli sheets +history-revert-status --url "https://sample.feishu.cn/sheets/SHTxxxxxx" --transaction-id "<transaction-id-from-history-revert>"
+```
+
+### `+undo`
+
+```bash
+# 撤销当前用户最近一次 AI 工具写入
+lark-cli sheets +undo --url "https://sample.feishu.cn/sheets/SHTxxxxxx"
+
+# 先预览将调用的底层 undo_last 请求
+lark-cli sheets +undo --url "https://sample.feishu.cn/sheets/SHTxxxxxx" --dry-run
 ```
