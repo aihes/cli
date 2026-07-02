@@ -190,7 +190,7 @@ func TestSlidesHistoryDryRunWithWikiPresentation(t *testing.T) {
 		t.Fatalf("wiki dry-run URL = %q, want %q", got, want)
 	}
 	if got := dry.API[0].Params["token"]; got != "wikcn123" {
-		t.Fatalf("wiki token = %#v, want wikcn123", got)
+		t.Fatalf("wiki node parameter mismatch: got %#v, want placeholder node id", got)
 	}
 	if got, want := dry.API[1].URL, "/open-apis/slides_ai/v1/xml_presentations/%3Cresolved_slides_token%3E/histories"; got != want {
 		t.Fatalf("history dry-run URL = %q, want %q", got, want)
