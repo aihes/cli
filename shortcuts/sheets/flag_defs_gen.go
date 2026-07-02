@@ -995,6 +995,14 @@ var flagDefs = map[string]commandDef{
 			{Name: "dry-run", Kind: "system", Type: "bool", Required: "optional"},
 		},
 	},
+	"+undo": {
+		Risk: "write",
+		Flags: []flagDef{
+			{Name: "url", Kind: "public", Type: "string", Required: "xor", Desc: "Spreadsheet locator"},
+			{Name: "spreadsheet-token", Kind: "public", Type: "string", Required: "xor", Desc: "Spreadsheet locator"},
+			{Name: "dry-run", Kind: "system", Type: "bool", Required: "optional"},
+		},
+	},
 	"+workbook-create": {
 		Risk: "write",
 		Flags: []flagDef{
