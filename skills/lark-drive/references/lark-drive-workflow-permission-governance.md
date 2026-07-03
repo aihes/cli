@@ -119,9 +119,9 @@ Risk / Structure: `R2` / `S2`
 
 1. "所有文档"只表示当前身份在确认范围内可枚举到的文档。不可见、无权限、API 不返回或工具预算不足的部分必须进入 `discovery_blockers` 或 `unsupported_checks`。
 2. 发现阶段必须生成稳定 `path`。不要只保存 title；同名文档必须能通过 path 或 token 区分。
-3. 只把 `drive.permission.public.get` 当前 schema 支持的类型加入公开权限可审计目标。已知支持包括 `doc`、`sheet`、`file`、`wiki`、`bitable`、`docx`、`mindnote`、`minutes`、`slides`；未来新增类型以运行时 schema 为准。
+3. 只把 `drive.permission.public.get` 当前 schema 支持的类型加入公开权限可审计目标。已知支持包括 `doc`、`sheet`、`file`、`wiki`、`bitable`、`docx`、`mindnote`、`minutes`、`slides`；未来新增类型以运行时 schema 为准。Drive 文件夹自身权限查询走 `drive +folder-permission-get`。
 4. `minutes` 只能作为 `partial_public_permission` 目标：可读取 / 修改公开权限和 owner 转移能力以运行时 schema 为准，但 `drive metas batch_query` 当前不支持 `minutes`，URL、owner、密级等 metadata 可能进入 `unsupported_checks`。
-5. `folder` 只作为递归容器，不执行 `permission.public get` / `patch`。如果用户明确要求 owner 转移且 schema 支持 `folder`，必须按 owner-transfer 写入规则单独确认。`shortcut`、`catalog` 或缺少 stable token/type 的条目必须记录为 unsupported，除非后续 API 明确解析出支持目标。
+5. `folder` 只作为递归容器时，不执行 raw `permission.public get` / `patch`；如用户明确要查询文件夹自身公开访问和协作权限设置，可对该文件夹单独执行 `drive +folder-permission-get`。如果用户明确要求 owner 转移且 schema 支持 `folder`，必须按 owner-transfer 写入规则单独确认。`shortcut`、`catalog` 或缺少 stable token/type 的条目必须记录为 unsupported，除非后续 API 明确解析出支持目标。
 6. 对大范围目标输出进度时，只展示已扫描容器数、已发现目标数、已审计目标数、剩余队列或 blocker；不要默认展示内部 page token / cursor。
 
 Wiki space / node 发现：
@@ -133,7 +133,7 @@ Wiki space / node 发现：
 
 Drive folder 发现：
 
-1. `/drive/folder/<folder_token>` 解析为 `target_scope=drive_folder`。文件夹自身公开权限不支持；继续枚举其子文档。
+1. `/drive/folder/<folder_token>` 解析为 `target_scope=drive_folder`。默认继续枚举其子文档；只有用户明确要求文件夹自身权限设置时，才额外调用 `drive +folder-permission-get` 读取该文件夹自身设置。
 2. 按 [`lark-drive-files-list.md`](lark-drive-files-list.md) 递归处理 `data.files`、`has_more` 和 `next_page_token`。不要把第一页数量当作完整范围。
 3. 只对返回项中的 `folder` 继续递归；对子文档按 `type + token` 归一化为 `discovered_targets`。
 4. 如果某个目录分页失败、无 continuation token、权限不足或 API 报错，只阻断该目录分支，并在 `discovery_blockers` 中记录；继续处理其他可枚举分支。
@@ -141,7 +141,7 @@ Drive folder 发现：
 ## Fact Read Rules
 
 1. `drive metas batch_query` 单次最多 200 个 `request_docs`；当 `targets` 或 `discovered_targets` 超过 200 个时，必须分批读取并合并结果。
-2. `drive permission.public get` 没有批量读取接口；对支持目标逐个读取。单个目标失败时记录 `unsupported_checks` 或 `partial`，不要阻断其他目标。
+2. `drive permission.public get` 没有批量读取接口；对支持目标逐个读取。文件夹自身权限读取使用 `drive +folder-permission-get`。单个目标失败时记录 `unsupported_checks` 或 `partial`，不要阻断其他目标。
 3. 对 Wiki 发现目标，公开权限读取优先使用 `type=wiki` + `node_token`；metadata 可使用 `obj_type` + `obj_token` 补充 title、owner、URL 和 `sec_label_name`。
 4. 当 intent 是 `list_permission_settings` 时，只输出权限设置清单和覆盖限制，不主动生成修复计划。
 5. 单目标、多目标明确列表和容器发现目标都必须复用同一套逐目标事实读取与语义归一逻辑；差异只体现在目标来源、coverage summary 和输出聚合。
@@ -170,7 +170,7 @@ Drive folder 发现：
 
 - 文档公共访问和协作权限设置修改（`drive permission.public patch`）属于高风险写入。请求确认前，必须展示 target title、token、current setting、desired setting 和准确 field changes。
 - 如果 `manage_public_auth.auth_result=false`，禁止 patch。告诉用户需要具备 manage-public 权限的用户，或由 owner 操作。
-- `drive permission.public get` 只用于 `drive +inspect` 或 `DISCOVER_TARGETS` 可解析且运行时 schema 支持的目标类型；类型集合不要硬编码，执行时以 `lark-cli schema drive.permission.public.get` 为准。
+- `drive permission.public get` 只用于 `drive +inspect` 或 `DISCOVER_TARGETS` 可解析且运行时 schema 支持的目标类型；类型集合不要硬编码，执行时以 `lark-cli schema drive.permission.public.get` 为准。文件夹自身设置用 `drive +folder-permission-get`。
 - 不要 patch 已解析类型不支持的字段。对于 wiki 目标，必须省略 schema 明确标注为 wiki 不支持的字段。
 - 不要在同一个写入确认中合并密级标签更新和文档公共访问与协作权限设置修改；必须分别确认。
 - `drive +apply-permission` 默认不批量执行；每次调用都会向 owner 发送通知。

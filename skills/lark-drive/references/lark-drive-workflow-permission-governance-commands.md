@@ -69,6 +69,14 @@ lark-cli drive permission.public get \
   --as user --format json
 ```
 
+读取 Drive 文件夹自身 public permission：
+
+```bash
+lark-cli drive +folder-permission-get \
+  --folder-token "<folder_token>" \
+  --as user --format json
+```
+
 按需读取访问统计：
 
 ```bash
