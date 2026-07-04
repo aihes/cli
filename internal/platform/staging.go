@@ -41,6 +41,13 @@ type stagingRegistrar struct {
 	// can detect the call.
 	actuallyRestricted bool
 
+	// skillsOverlay holds the staged Skills contribution, captured for the
+	// host to feed into the skill resolver later. nil means the plugin
+	// did not call r.EmbeddedSkills. overlaySet records that the call happened so a
+	// second call in the same plugin can be rejected.
+	skillsOverlay *platform.SkillsOverlay
+	overlaySet    bool
+
 	// seenHookNames detects duplicate hookName within this plugin's
 	// Install call.
 	seenHookNames map[string]bool
@@ -142,6 +149,25 @@ func (r *stagingRegistrar) Restrict(rule *platform.Rule) {
 	cp.Deny = append([]string(nil), rule.Deny...)
 	cp.Identities = append([]platform.Identity(nil), rule.Identities...)
 	r.rules = append(r.rules, &cp)
+}
+
+func (r *stagingRegistrar) EmbeddedSkills(spec *platform.SkillsOverlay) {
+	if r.overlaySet {
+		r.bufferErr(ReasonInvalidSkillsOverlay, "EmbeddedSkills() called more than once in the same plugin")
+		return
+	}
+	r.overlaySet = true
+	if spec == nil {
+		r.bufferErr(ReasonInvalidSkillsOverlay, "EmbeddedSkills(nil)")
+		return
+	}
+	// Defensive clone: freeze Remove so a plugin cannot mutate it after
+	// Install returns. Overlay/Base are read-only fs.FS views retained by
+	// reference.
+	cp := *spec
+	cp.Allow = append([]string(nil), spec.Allow...)
+	cp.Remove = append([]string(nil), spec.Remove...)
+	r.skillsOverlay = &cp
 }
 
 // --- helpers ---

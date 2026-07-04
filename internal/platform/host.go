@@ -11,6 +11,7 @@ import (
 	"github.com/larksuite/cli/extension/platform"
 	"github.com/larksuite/cli/internal/cmdpolicy"
 	"github.com/larksuite/cli/internal/hook"
+	"github.com/larksuite/cli/internal/skillpolicy"
 )
 
 // PluginInfo is the metadata of a successfully-installed plugin,
@@ -29,9 +30,10 @@ type PluginInfo struct {
 // every plugin that committed successfully (FailOpen-skipped plugins
 // are absent), for downstream diagnostics.
 type InstallResult struct {
-	Registry    *hook.Registry
-	PluginRules []cmdpolicy.PluginRule
-	Plugins     []PluginInfo
+	Registry     *hook.Registry
+	PluginRules  []cmdpolicy.PluginRule
+	PluginSkills []skillpolicy.PluginSkill
+	Plugins      []PluginInfo
 }
 
 // InstallAll runs every registered plugin through the staging
@@ -142,6 +144,16 @@ func installOne(name string, p platform.Plugin, result *InstallResult) error {
 		}
 	}
 
+	// The Builder rejects this at Build time; hand-written plugins are
+	// caught here (authoring error, aborts unconditionally).
+	if caps.HideDiagnostics && !caps.Restricts {
+		return &PluginInstallError{
+			PluginName: name,
+			ReasonCode: ReasonInvalidCapability,
+			Reason:     "HideDiagnostics=true requires Restricts=true",
+		}
+	}
+
 	// Version compatibility check. Two distinct failure modes:
 	//
 	//   1. Parse error (constraint is malformed, e.g. ">=abc")
@@ -205,6 +217,12 @@ func installOne(name string, p platform.Plugin, result *InstallResult) error {
 		result.PluginRules = append(result.PluginRules, cmdpolicy.PluginRule{
 			PluginName: name,
 			Rule:       rule,
+		})
+	}
+	if staging.skillsOverlay != nil {
+		result.PluginSkills = append(result.PluginSkills, skillpolicy.PluginSkill{
+			PluginName:    name,
+			SkillsOverlay: staging.skillsOverlay,
 		})
 	}
 

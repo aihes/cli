@@ -11,6 +11,7 @@ import (
 
 	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/core"
+	"github.com/larksuite/cli/internal/policystate"
 )
 
 // ClassifyContext is the contextual data BuildAPIError uses to populate
@@ -370,13 +371,24 @@ func PermissionHint(missing []string, identity string, subtype errs.Subtype, con
 		}
 		return "the app developer must apply for the required scope(s) at the developer console"
 	case errs.SubtypeMissingScope:
+		// With the auth domain absent from this build there is no login
+		// command to point at; no hint beats a dead-end hint.
+		if policystate.DomainDeniedByPlugin("auth") {
+			return ""
+		}
 		if len(missing) > 0 {
 			return fmt.Sprintf("run `lark-cli auth login --scope \"%s\"` to re-authorize the user with the updated scope set", strings.Join(missing, " "))
 		}
 		return "run `lark-cli auth login` to re-authorize the user with the updated scope set"
 	case errs.SubtypeTokenScopeInsufficient:
+		if policystate.DomainDeniedByPlugin("auth") {
+			return "check the token's granted scopes"
+		}
 		return "check the token's granted scopes; run `lark-cli auth login` to refresh if the scope was added after the token was issued"
 	case errs.SubtypeUserUnauthorized:
+		if policystate.DomainDeniedByPlugin("auth") {
+			return "the operation may be blocked by external-chat or admin policy"
+		}
 		return "run `lark-cli auth login` to re-authorize this user; if re-auth does not help, the operation may be blocked by external-chat or admin policy"
 	case errs.SubtypeAppUnavailable:
 		return "ask the tenant admin to check the app's install status in the Lark admin console"

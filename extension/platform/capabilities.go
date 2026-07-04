@@ -47,4 +47,9 @@ type Capabilities struct {
 	// constants above; the framework requires FailClosed whenever
 	// Restricts=true.
 	FailurePolicy FailurePolicy
+
+	// HideDiagnostics retires the policy self-inspection commands
+	// (`config policy show`, `config plugins show`) from the build.
+	// Requires Restricts=true; the install fails otherwise.
+	HideDiagnostics bool
 }

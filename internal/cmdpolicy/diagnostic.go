@@ -27,3 +27,15 @@ var diagnosticPaths = map[string]bool{
 func IsDiagnosticPath(path string) bool {
 	return diagnosticPaths[path]
 }
+
+// DiagnosticPaths returns the exempt self-inspection command paths, for
+// the presentation layer: an integrator's HideDiagnostics retires exactly
+// this set, and the help-concealment pass hides it from listings when the
+// surrounding domain is plugin-denied.
+func DiagnosticPaths() []string {
+	out := make([]string, 0, len(diagnosticPaths))
+	for p := range diagnosticPaths {
+		out = append(out, p)
+	}
+	return out
+}

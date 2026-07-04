@@ -34,7 +34,7 @@ func TestEnvelope_yamlPolicySourceDoesNotLeakHomePath(t *testing.T) {
 		cmdpolicy.ResolveSource{
 			Kind: cmdpolicy.SourceYAML,
 			Name: "/Users/alice/.lark-cli/policy.yml", // simulate an absolute path
-		}, "my-readonly-rule")
+		}, "my-readonly-rule", "")
 
 	cmdpolicy.Apply(root, denied)
 	err := leaf.RunE(leaf, nil)
@@ -77,7 +77,7 @@ func TestEnvelope_pluginPolicySourceCarriesName(t *testing.T) {
 	})
 	denied := cmdpolicy.BuildDeniedByPath(root, e.EvaluateAll(root),
 		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourcePlugin, Name: "secaudit"},
-		"secaudit-policy")
+		"secaudit-policy", "")
 	cmdpolicy.Apply(root, denied)
 
 	err := leaf.RunE(leaf, nil)
@@ -85,10 +85,17 @@ func TestEnvelope_pluginPolicySourceCarriesName(t *testing.T) {
 	if !errors.As(err, &ve) {
 		t.Fatalf("expected *errs.ValidationError, got %T", err)
 	}
-	// The plugin name IS surfaced (in-binary, part of the contract): it
-	// must appear in the Hint so an integrator debugging a denial knows
-	// which plugin fired.
-	if !strings.Contains(ve.Hint, "plugin:secaudit") {
-		t.Errorf("hint must carry policy_source plugin:secaudit, got %q", ve.Hint)
+	// A plugin-source denial presents as absent: no hint, no plugin name
+	// on the wire. Plugin attribution moves to the in-process Cause
+	// (*platform.CommandDeniedError) for integrators debugging a denial.
+	if ve.Subtype != errs.SubtypeCommandUnavailable {
+		t.Errorf("subtype = %q, want %q", ve.Subtype, errs.SubtypeCommandUnavailable)
+	}
+	if ve.Hint != "" || strings.Contains(ve.Message, "plugin:secaudit") {
+		t.Errorf("wire must not expose the plugin source; hint=%q message=%q", ve.Hint, ve.Message)
+	}
+	var cd *platform.CommandDeniedError
+	if !errors.As(err, &cd) || cd.PolicySource != "plugin:secaudit" {
+		t.Errorf("in-process Cause must carry plugin:secaudit, got %+v", cd)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/larksuite/cli/internal/i18n"
 	"github.com/larksuite/cli/internal/keychain"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/policystate"
 )
 
 type noopConfigKeychain struct{}
@@ -561,6 +562,57 @@ func TestPrintLangPreferenceConfirmation(t *testing.T) {
 		printLangPreferenceConfirmation(&ConfigInitOptions{Factory: f, Lang: "", UILang: i18n.LangZhCN, langExplicit: true})
 		if got := stderr.String(); got != "" {
 			t.Errorf("stderr = %q, want empty when --lang is empty", got)
+		}
+	})
+}
+
+// The "no active profile" hint points at `lark-cli profile list`; that pointer
+// must be gated on the profile domain still being present. When a plugin denies
+// the profile domain, the hint would be a dead end, so it is omitted — the error
+// itself is unchanged.
+func TestConfigShowRun_ProfileHintGatedByPluginDenial(t *testing.T) {
+	multi := &core.MultiAppConfig{
+		CurrentApp: "missing",
+		Apps: []core.AppConfig{{
+			Name:      "default",
+			AppId:     "app-default",
+			AppSecret: core.PlainSecret("secret-default"),
+			Brand:     core.BrandFeishu,
+		}},
+	}
+
+	hintOf := func(t *testing.T) string {
+		t.Helper()
+		t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
+		if err := core.SaveMultiAppConfig(multi); err != nil {
+			t.Fatalf("SaveMultiAppConfig() error = %v", err)
+		}
+		f, _, _, _ := cmdutil.TestFactory(t, nil)
+		err := configShowRun(&ConfigShowOptions{Factory: f})
+		var cfgErr *errs.ConfigError
+		if !errors.As(err, &cfgErr) {
+			t.Fatalf("expected *errs.ConfigError, got %T %v", err, err)
+		}
+		if cfgErr.Subtype != errs.SubtypeNotConfigured {
+			t.Fatalf("subtype = %q, want not_configured", cfgErr.Subtype)
+		}
+		return cfgErr.Hint
+	}
+
+	t.Run("profile domain present: hint points at profile list", func(t *testing.T) {
+		policystate.ResetForTesting()
+		t.Cleanup(policystate.ResetForTesting)
+		if h := hintOf(t); !strings.Contains(h, "lark-cli profile list") {
+			t.Errorf("hint = %q, want it to reference `lark-cli profile list`", h)
+		}
+	})
+
+	t.Run("profile domain plugin-denied: hint omitted", func(t *testing.T) {
+		policystate.ResetForTesting()
+		t.Cleanup(policystate.ResetForTesting)
+		policystate.SetPluginDeniedDomains(map[string]bool{"profile": true})
+		if h := hintOf(t); h != "" {
+			t.Errorf("hint = %q, want empty when the profile domain is plugin-denied", h)
 		}
 	})
 }

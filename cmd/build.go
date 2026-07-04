@@ -28,7 +28,10 @@ import (
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/hook"
 	"github.com/larksuite/cli/internal/keychain"
+	internalplatform "github.com/larksuite/cli/internal/platform"
+	"github.com/larksuite/cli/internal/policystate"
 	"github.com/larksuite/cli/internal/registry"
+	"github.com/larksuite/cli/internal/skillpolicy"
 	"github.com/larksuite/cli/shortcuts"
 	"github.com/spf13/cobra"
 )
@@ -167,12 +170,19 @@ func buildInternal(ctx context.Context, inv cmdutil.InvocationContext, opts ...B
 	if cfg.streams == nil {
 		cfg.streams = cmdutil.SystemIO()
 	}
-
 	// Initialize the registry brand before anything touches the runtime
 	// catalog (its sync.Once would otherwise lock onto the Feishu default).
 	if cfg.startupBrand != "" {
 		registry.InitWithBrand(cfg.startupBrand)
 	}
+
+	// Reset every process-global snapshot up front, not only inside
+	// applyUserPolicyPruning: the skipPlugins and install-failure paths
+	// return before pruning runs, and a previous build's state must not
+	// leak into this one (long-lived embedders, test sequences).
+	policystate.SetPluginDeniedDomains(nil)
+	cmdpolicy.SetActive(nil)
+	internalplatform.SetActiveInventory(nil)
 
 	f := cmdutil.NewDefault(cfg.streams, inv)
 	if cfg.keychain != nil {
@@ -195,7 +205,16 @@ func buildInternal(ctx context.Context, inv cmdutil.InvocationContext, opts ...B
 	// rootUsageTemplate.
 	rootCmd.SetUsageTemplate(rootUsageTemplate)
 
-	installTipsHelpFunc(rootCmd)
+	// The skill-content getter also gates on the skills command domain:
+	// every pointer it feeds renders as `lark-cli skills read ...`, so with
+	// that domain plugin-denied the pointers would all be dead ends even
+	// though the content itself still exists.
+	installTipsHelpFunc(rootCmd, func() fs.FS {
+		if policystate.DomainDeniedByPlugin("skills") {
+			return nil
+		}
+		return f.SkillContent
+	})
 	rootCmd.SilenceErrors = true
 	// SilenceUsage as a static field (not only in PersistentPreRun) so it also
 	// covers flag-parse errors, which fail before PreRun runs — otherwise cobra
@@ -243,6 +262,8 @@ func buildInternal(ctx context.Context, inv cmdutil.InvocationContext, opts ...B
 	}
 
 	if cfg.skipPlugins {
+		installHelpCommand(rootCmd)
+		f.SkillContent = embeddedSkillContent
 		recordInventory(nil)
 		return f, rootCmd, nil
 	}
@@ -253,22 +274,51 @@ func buildInternal(ctx context.Context, inv cmdutil.InvocationContext, opts ...B
 		return f, rootCmd, nil
 	}
 	var pluginRules []cmdpolicy.PluginRule
+	var pluginSkills []skillpolicy.PluginSkill
 	var registry *hook.Registry
 	if installResult != nil {
 		pluginRules = installResult.PluginRules
+		pluginSkills = installResult.PluginSkills
 		registry = installResult.Registry
 	}
 
 	// Policy errors fail-CLOSED when a plugin contributed (security
 	// intent must not be silently dropped); yaml-only errors fail-OPEN
 	// with a warning so a typo can't lock the user out.
-	if err := applyUserPolicyPruning(rootCmd, pluginRules); err != nil {
+	denied, policyErr := applyUserPolicyPruning(rootCmd, pluginRules)
+	if policyErr != nil {
 		if len(pluginRules) > 0 {
-			installPluginConflictGuard(rootCmd, err)
+			installPluginConflictGuard(rootCmd, policyErr)
 			return f, rootCmd, nil
 		}
-		warnPolicyError(cfg.streams.ErrOut, err)
+		warnPolicyError(cfg.streams.ErrOut, policyErr)
 	}
+
+	// The custom help command attaches AFTER policy evaluation on purpose:
+	// it is a framework meta command, and inside the evaluated tree an
+	// allow-list rule (Allow: ["im/**"]) would deny it as
+	// domain_not_allowed — cobra's stock help command is likewise attached
+	// only at Execute time and never evaluated.
+	installHelpCommand(rootCmd)
+
+	// Presentation passes: a capability an integrator plugin denied
+	// presents as absent — retired global flags (--profile), no skills
+	// footer, diagnostics hidden or retired. Enforcement stays with
+	// cmdpolicy.Apply above; these only shape help and fixed hints.
+	applyPluginPresentation(rootCmd, installResult, denied)
+
+	// Resolve the embedded skill tree BEFORE wiring hooks: an invalid
+	// SkillsOverlay must fail fast, before wireHooks emits Startup, so a Startup
+	// side effect is never stranded without its Shutdown. Both skill readers
+	// -- `skills list`/`read` and the --help guidance -- then read this one
+	// f.SkillContent. Fails closed: never silently ship defaults once a
+	// customization is declared.
+	resolvedSkills, skillErr := skillpolicy.Resolve(embeddedSkillContent, pluginSkills)
+	if skillErr != nil {
+		installPluginSkillErrorGuard(rootCmd, skillErr)
+		return f, rootCmd, nil
+	}
+	f.SkillContent = resolvedSkills
 
 	if registry != nil {
 		if err := wireHooks(ctx, rootCmd, registry); err != nil {

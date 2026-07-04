@@ -297,6 +297,26 @@ func TestPrepareDomainHelp_PreservesHandAuthoredLong(t *testing.T) {
 }
 
 // A service domain carries only a Short at help time; it seeds the base.
+// The domain-guide pointer is likewise gated: removing the domain's skill
+// drops the pointer instead of leaving it dangling.
+func TestPrepareDomainHelp_GatesGuidePointerOnFS(t *testing.T) {
+	present := domainCmd("Consume and manage real-time events", "")
+	if !PrepareDomainHelp(present, fstest.MapFS{"lark-event/SKILL.md": &fstest.MapFile{Data: []byte("x")}}) {
+		t.Fatal("PrepareDomainHelp returned false for a domain-tagged command")
+	}
+	if !strings.Contains(present.Long, "lark-cli skills read lark-event") {
+		t.Errorf("skill present should emit the domain-guide pointer; got:\n%s", present.Long)
+	}
+
+	removed := domainCmd("Consume and manage real-time events", "")
+	if !PrepareDomainHelp(removed, fstest.MapFS{}) {
+		t.Fatal("PrepareDomainHelp returned false for a domain-tagged command")
+	}
+	if strings.Contains(removed.Long, "skills read lark-event") {
+		t.Errorf("removed skill must leave no domain-guide pointer; got:\n%s", removed.Long)
+	}
+}
+
 func TestPrepareDomainHelp_FallsBackToShort(t *testing.T) {
 	dom := domainCmd("Message and group chat management", "")
 	if !PrepareDomainHelp(dom, nil) {

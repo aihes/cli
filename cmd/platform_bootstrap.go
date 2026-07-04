@@ -17,6 +17,7 @@ import (
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/hook"
 	internalplatform "github.com/larksuite/cli/internal/platform"
+	"github.com/larksuite/cli/internal/policystate"
 	"github.com/larksuite/cli/internal/vfs"
 )
 
@@ -35,7 +36,15 @@ const userPolicyFileName = "policy.yml"
 //
 // pluginRules carries Plugin.Restrict() contributions collected from
 // the InstallAll phase; nil/empty is fine.
-func applyUserPolicyPruning(rootCmd *cobra.Command, pluginRules []cmdpolicy.PluginRule) error {
+//
+// The returned denied map (nil when no rule denied anything) feeds the
+// post-pruning presentation passes in build.go: the global-flag gate and
+// the fixed-hint filter both key off which domains a plugin denied.
+func applyUserPolicyPruning(rootCmd *cobra.Command, pluginRules []cmdpolicy.PluginRule) (map[string]cmdpolicy.Denial, error) {
+	// Reset up front so every early return leaves the process-global
+	// snapshot clean; the success path re-populates it.
+	policystate.SetPluginDeniedDomains(nil)
+
 	// Plugin rules shadow the yaml source entirely (Resolve: plugin >
 	// yaml). When a plugin contributed rules we therefore do NOT even
 	// read ~/.lark-cli/policy.yml: build.go fail-CLOSES on any policy
@@ -65,7 +74,7 @@ func applyUserPolicyPruning(rootCmd *cobra.Command, pluginRules []cmdpolicy.Plug
 			// show` reports "no policy" instead of a stale rule that
 			// doesn't reflect the current command tree.
 			cmdpolicy.SetActive(nil)
-			return lerr
+			return nil, lerr
 		}
 		yamlRules = loaded
 	}
@@ -77,11 +86,11 @@ func applyUserPolicyPruning(rootCmd *cobra.Command, pluginRules []cmdpolicy.Plug
 	})
 	if err != nil {
 		cmdpolicy.SetActive(nil)
-		return err
+		return nil, err
 	}
 	if len(rules) == 0 {
 		cmdpolicy.SetActive(&cmdpolicy.ActivePolicy{Source: source})
-		return nil
+		return nil, nil
 	}
 
 	// RuleName attributes a denial to a specific rule in the envelope.
@@ -94,17 +103,39 @@ func applyUserPolicyPruning(rootCmd *cobra.Command, pluginRules []cmdpolicy.Plug
 		ruleName = rules[0].Name
 	}
 
+	// DeniedMessage is build-level: the first non-empty message across
+	// the single owner's rules speaks for all of them.
+	deniedMessage := ""
+	for _, r := range rules {
+		if r.DeniedMessage != "" {
+			deniedMessage = r.DeniedMessage
+			break
+		}
+	}
+
 	engine := cmdpolicy.NewSet(rules)
 	decisions := engine.EvaluateAll(rootCmd)
-	denied := cmdpolicy.BuildDeniedByPath(rootCmd, decisions, source, ruleName)
+	denied := cmdpolicy.BuildDeniedByPath(rootCmd, decisions, source, ruleName, deniedMessage)
 	cmdpolicy.Apply(rootCmd, denied)
 
 	cmdpolicy.SetActive(&cmdpolicy.ActivePolicy{
-		Rules:       rules,
-		Source:      source,
-		DeniedPaths: len(denied),
+		Rules:        rules,
+		Source:       source,
+		DeniedPaths:  len(denied),
+		DeniedByPath: denied,
 	})
-	return nil
+
+	// Whole-domain denials surface as aggregate entries keyed by the
+	// bare domain name (no slash); record them for render-time hint
+	// emitters (internal/auth, internal/client, the notice provider).
+	pluginDomains := map[string]bool{}
+	for path, d := range denied {
+		if !strings.Contains(path, "/") && cmdpolicy.IsPluginPolicySource(d.PolicySource) {
+			pluginDomains[path] = true
+		}
+	}
+	policystate.SetPluginDeniedDomains(pluginDomains)
+	return denied, nil
 }
 
 // installPluginsAndHooks runs the InstallAll phase on the globally-
@@ -156,7 +187,22 @@ func recordInventory(installResult *internalplatform.InstallResult) {
 			AllowUnannotated: r.Rule.AllowUnannotated,
 		})
 	}
-	internalplatform.SetActiveInventory(internalplatform.BuildInventory(pluginSrcs, installResult.Registry, ruleSrcs))
+	skillSrcs := make([]internalplatform.SkillsInventorySource, 0, len(installResult.PluginSkills))
+	for _, ps := range installResult.PluginSkills {
+		if ps.SkillsOverlay == nil {
+			continue
+		}
+		skillSrcs = append(skillSrcs, internalplatform.SkillsInventorySource{
+			PluginName: ps.PluginName,
+			View: internalplatform.SkillsOverlayView{
+				Allow:   ps.SkillsOverlay.Allow,
+				Remove:  ps.SkillsOverlay.Remove,
+				Overlay: ps.SkillsOverlay.Overlay != nil,
+				Base:    ps.SkillsOverlay.Base != nil,
+			},
+		})
+	}
+	internalplatform.SetActiveInventory(internalplatform.BuildInventory(pluginSrcs, installResult.Registry, ruleSrcs, skillSrcs))
 }
 
 // wireHooks installs Observer/Wrapper hooks onto every runnable command

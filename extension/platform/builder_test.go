@@ -14,11 +14,13 @@ import (
 // recorder Registrar captures everything a builder schedules so the
 // test can assert what Install produced without involving the host.
 type recorder struct {
-	observers  int
-	wrappers   int
-	lifecycles int
-	rule       *platform.Rule   // last rule (existing single-rule assertions)
-	rules      []*platform.Rule // every rule, in Restrict order
+	observers     int
+	wrappers      int
+	lifecycles    int
+	rule          *platform.Rule   // last rule (existing single-rule assertions)
+	rules         []*platform.Rule // every rule, in Restrict order
+	skillsOverlay *platform.SkillsOverlay
+	skillCalls    int
 }
 
 func (r *recorder) Observe(platform.When, string, platform.Selector, platform.Observer) {
@@ -29,6 +31,10 @@ func (r *recorder) On(platform.LifecycleEvent, string, platform.LifecycleHandler
 func (r *recorder) Restrict(rule *platform.Rule) {
 	r.rule = rule
 	r.rules = append(r.rules, rule)
+}
+func (r *recorder) EmbeddedSkills(spec *platform.SkillsOverlay) {
+	r.skillsOverlay = spec
+	r.skillCalls++
 }
 
 // Restrict must snapshot each rule: a caller that reuses and mutates the
@@ -209,5 +215,80 @@ func TestBuilder_failOpenThenRestrictOK(t *testing.T) {
 	}
 	if p.Capabilities().FailurePolicy != platform.FailClosed {
 		t.Errorf("FailurePolicy = %v, want FailClosed", p.Capabilities().FailurePolicy)
+	}
+}
+
+// EmbeddedSkills() must snapshot Remove: a caller that mutates the same slice
+// after the call must still get the value staged at call time.
+func TestBuilder_skillsInstalledAndCloned(t *testing.T) {
+	remove := []string{"lark-shared"}
+	b := platform.NewPlugin("p", "0").EmbeddedSkills(&platform.SkillsOverlay{Remove: remove})
+	remove[0] = "mutated"
+
+	p, err := b.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	r := &recorder{}
+	if err := p.Install(r); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if r.skillCalls != 1 {
+		t.Fatalf("Skills calls = %d, want 1", r.skillCalls)
+	}
+	if r.skillsOverlay == nil || len(r.skillsOverlay.Remove) != 1 || r.skillsOverlay.Remove[0] != "lark-shared" {
+		t.Errorf("staged Remove leaked later mutation: %+v", r.skillsOverlay)
+	}
+}
+
+func TestBuilder_skillsNilRejected(t *testing.T) {
+	_, err := platform.NewPlugin("p", "0").EmbeddedSkills(nil).Build()
+	if err == nil {
+		t.Fatal("EmbeddedSkills(nil) must produce error")
+	}
+}
+
+func TestBuilder_skillsTwiceRejected(t *testing.T) {
+	_, err := platform.NewPlugin("p", "0").
+		EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-a"}}).
+		EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-b"}}).
+		Build()
+	if err == nil {
+		t.Fatal("calling EmbeddedSkills() twice must produce error")
+	}
+}
+
+// EmbeddedSkills() customizes guidance content, not a security boundary, so
+// unlike Restrict() it must NOT force FailClosed.
+func TestBuilder_skillsDoesNotForceFailClosed(t *testing.T) {
+	p, err := platform.NewPlugin("p", "0").EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-a"}}).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	caps := p.Capabilities()
+	if caps.Restricts {
+		t.Error("EmbeddedSkills() must not set Restricts")
+	}
+	if caps.FailurePolicy != platform.FailOpen {
+		t.Errorf("FailurePolicy = %v, want FailOpen (default)", caps.FailurePolicy)
+	}
+}
+
+// HideDiagnostics only makes sense alongside Restrict: without a rule
+// there is no integrator policy whose inspection could be hidden.
+func TestBuilder_hideDiagnosticsRequiresRestrict(t *testing.T) {
+	_, err := platform.NewPlugin("p", "0").HideDiagnostics().Build()
+	if err == nil {
+		t.Fatal("HideDiagnostics() without Restrict() must fail Build")
+	}
+	p, err := platform.NewPlugin("p", "0").
+		Restrict(&platform.Rule{Deny: []string{"config/**"}}).
+		HideDiagnostics().
+		Build()
+	if err != nil {
+		t.Fatalf("HideDiagnostics()+Restrict() must build: %v", err)
+	}
+	if !p.Capabilities().HideDiagnostics {
+		t.Error("Capabilities.HideDiagnostics must be set")
 	}
 }

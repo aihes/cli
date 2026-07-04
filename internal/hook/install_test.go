@@ -412,3 +412,46 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// A framework meta command (help, stamped lark:framework_meta) dispatches
+// outside the Wrap chain: a swallowing Wrapper must not intercept it, and its
+// own RunE result must come through unchanged.
+func TestInstall_frameworkMetaBypassesWrapChain(t *testing.T) {
+	root := &cobra.Command{Use: "root"}
+	metaRan := false
+	sentinel := errors.New("meta result")
+	leaf := &cobra.Command{
+		Use: "help",
+		RunE: func(*cobra.Command, []string) error {
+			metaRan = true
+			return sentinel
+		},
+		Annotations: map[string]string{"lark:framework_meta": "true"},
+	}
+	root.AddCommand(leaf)
+
+	reg := hook.NewRegistry()
+	wrapCalled := false
+	reg.AddWrapper(hook.WrapperEntry{
+		Name: "swallow", Selector: platform.All(),
+		Fn: func(next platform.Handler) platform.Handler {
+			return func(context.Context, platform.Invocation) error {
+				wrapCalled = true
+				return nil
+			}
+		},
+	})
+
+	hook.Install(root, reg, fakeViewSource{view: fakeView{path: "help"}})
+
+	err := leaf.RunE(leaf, nil)
+	if wrapCalled {
+		t.Error("Wrap chain must not run for a framework meta command")
+	}
+	if !metaRan {
+		t.Error("meta command's own RunE must run")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("meta result must pass through unchanged, got %v", err)
+	}
+}

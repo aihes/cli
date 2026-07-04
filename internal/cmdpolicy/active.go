@@ -23,6 +23,9 @@ type ActivePolicy struct {
 	Rules       []*platform.Rule
 	Source      ResolveSource
 	DeniedPaths int // number of commands the engine marked as denied (post-aggregation)
+
+	// DeniedByPath is the full post-aggregation denial map.
+	DeniedByPath map[string]Denial
 }
 
 var (
@@ -45,6 +48,27 @@ func SetActive(p *ActivePolicy) {
 		return
 	}
 	activePolicy = cloneActivePolicy(p)
+}
+
+// AppendActiveDenials merges presentation-time denials (retired or
+// converged diagnostics) into the recorded snapshot, so `config policy show`
+// and other introspection reflect the tree that actually shipped rather
+// than only the bootstrap-time aggregate.
+func AppendActiveDenials(extra map[string]Denial) {
+	activeMu.Lock()
+	defer activeMu.Unlock()
+	if activePolicy == nil || len(extra) == 0 {
+		return
+	}
+	if activePolicy.DeniedByPath == nil {
+		activePolicy.DeniedByPath = map[string]Denial{}
+	}
+	for path, d := range extra {
+		if _, dup := activePolicy.DeniedByPath[path]; !dup {
+			activePolicy.DeniedPaths++
+		}
+		activePolicy.DeniedByPath[path] = d
+	}
 }
 
 // GetActive returns a deep copy of the recorded policy, or nil if
@@ -79,6 +103,12 @@ func cloneActivePolicy(in *ActivePolicy) *ActivePolicy {
 			rule.Deny = append([]string(nil), r.Deny...)
 			rule.Identities = append([]platform.Identity(nil), r.Identities...)
 			cp.Rules[i] = &rule
+		}
+	}
+	if in.DeniedByPath != nil {
+		cp.DeniedByPath = make(map[string]Denial, len(in.DeniedByPath))
+		for k, v := range in.DeniedByPath {
+			cp.DeniedByPath[k] = v
 		}
 	}
 	return &cp

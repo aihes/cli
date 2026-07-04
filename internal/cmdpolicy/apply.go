@@ -4,7 +4,10 @@
 package cmdpolicy
 
 import (
+	"strings"
+
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/extension/platform"
@@ -73,6 +76,16 @@ const (
 	AnnotationDenialLayer  = "lark:policy_denied_layer"
 	AnnotationDenialSource = "lark:policy_denied_source"
 
+	// AnnotationDenialMessage carries the resolved unavailable message
+	// for the cmd layer's help interceptor (plugin-source denials only).
+	AnnotationDenialMessage = "lark:policy_denied_message"
+
+	// AnnotationFrameworkMeta marks a framework meta command (help): its
+	// RunE is framework presentation, dispatched outside the plugin Wrap
+	// chain so a Wrapper cannot swallow or rewrite its result. Observers
+	// still see the invocation.
+	AnnotationFrameworkMeta = "lark:framework_meta"
+
 	// AnnotationPureGroup marks a cobra.Command that is logically a
 	// parent-only group but had a RunE attached by the bootstrap-time
 	// unknown-subcommand guard. The engine treats annotated commands
@@ -124,6 +137,37 @@ func BuildDenialError(path string, d Denial) *errs.ValidationError {
 		WithCause(cd)
 }
 
+// IsPluginPolicySource reports whether a policy source names a plugin.
+// Plugin sources select the "command unavailable" presentation.
+func IsPluginPolicySource(source string) bool {
+	return strings.HasPrefix(source, "plugin:")
+}
+
+// DefaultUnavailableMessage is the message shown when a plugin-restricted
+// command is invoked and the integrator supplied no Rule.DeniedMessage.
+const DefaultUnavailableMessage = "command not included in this build"
+
+// messageOf resolves the effective unavailable message for a denial.
+func messageOf(d Denial) string {
+	if d.DeniedMessage != "" {
+		return d.DeniedMessage
+	}
+	return DefaultUnavailableMessage
+}
+
+// BuildUnavailableError is the plugin-source counterpart of
+// BuildDenialError: no hint, no policy vocabulary on the wire. The
+// *platform.CommandDeniedError stays reachable as the Cause for
+// in-process consumers; Cause is never serialized.
+func BuildUnavailableError(path string, d Denial) *errs.ValidationError {
+	msg := d.DeniedMessage
+	if msg == "" {
+		msg = DefaultUnavailableMessage
+	}
+	return errs.NewValidationError(errs.SubtypeCommandUnavailable, "%s", msg).
+		WithCause(CommandDeniedFromDenial(path, d))
+}
+
 // installDenyStub mutates a cobra.Command in place. Unlike cmd/prune.go
 // which does RemoveCommand+AddCommand (changing the pointer), we modify
 // the existing node so any external reference (snapshots, alias targets)
@@ -158,6 +202,19 @@ func installDenyStub(cmd *cobra.Command, path string, d Denial) bool {
 	}
 	cmd.Hidden = true
 	cmd.DisableFlagParsing = true
+	// A plugin-denied command presents as absent: its local flags leave
+	// shell completion too. Hidden, not removed — yaml denials keep the
+	// full usage render, and the plugin help path never renders usage.
+	if IsPluginPolicySource(d.PolicySource) {
+		cmd.Flags().VisitAll(func(f *pflag.Flag) { f.Hidden = true })
+		// Both positional-completion channels: the static ValidArgs list
+		// (cobra serves it before consulting the function) and the
+		// dynamic ValidArgsFunction.
+		cmd.ValidArgs = nil
+		cmd.ValidArgsFunction = func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+	}
 
 	// Bypass cobra's pre-RunE gates that would otherwise short-circuit
 	// before the wrapped RunE (= where observers + denial guard live):
@@ -194,11 +251,19 @@ func installDenyStub(cmd *cobra.Command, path string, d Denial) bool {
 	cmd.Annotations[AnnotationDenialSource] = d.PolicySource
 
 	denial := d // capture by value for the closure
-	cmd.RunE = func(c *cobra.Command, args []string) error {
-		// The typed message carries the user-facing semantic ("a command
-		// was denied"); the hint carries the layer / source / rule
-		// distinction ("policy" vs "strict_mode") for debugging.
-		return BuildDenialError(path, denial)
+	if IsPluginPolicySource(d.PolicySource) {
+		// The message annotation feeds the cmd layer's help interceptor.
+		cmd.Annotations[AnnotationDenialMessage] = messageOf(d)
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			return BuildUnavailableError(path, denial)
+		}
+	} else {
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			// The typed message carries the user-facing semantic ("a command
+			// was denied"); the hint carries the layer / source / rule
+			// distinction ("policy" vs "strict_mode") for debugging.
+			return BuildDenialError(path, denial)
+		}
 	}
 	// Clear any pre-existing Run hook: cobra prefers RunE when both are
 	// set, but leaving a stale Run around is a foot-gun for future

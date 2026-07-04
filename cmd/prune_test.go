@@ -14,6 +14,7 @@ import (
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/policystate"
 	"github.com/spf13/cobra"
 )
 
@@ -378,4 +379,42 @@ func TestStrictModeStub_PreservesOriginalMetadata(t *testing.T) {
 	if stub.Annotations[cmdpolicy.AnnotationDenialLayer] != cmdpolicy.LayerStrictMode {
 		t.Errorf("denial annotation overwritten or missing")
 	}
+}
+
+// The strict-mode stub's RunE appends a `config strict-mode` switch-policy
+// pointer to its hint — but only when the config domain is still present. With
+// the config domain plugin-denied that pointer is a dead end, so it is omitted;
+// the denial itself (message, subtype) is unchanged.
+func TestStrictModeStub_ConfigHintGatedByPluginDenial(t *testing.T) {
+	hintOf := func(t *testing.T) string {
+		t.Helper()
+		child := &cobra.Command{Use: "search", RunE: func(*cobra.Command, []string) error { return nil }}
+		stub := strictModeStubFrom(child, core.StrictModeBot)
+		err := stub.RunE(stub, nil)
+		var verr *errs.ValidationError
+		if !errors.As(err, &verr) {
+			t.Fatalf("expected *errs.ValidationError, got %T %v", err, err)
+		}
+		if verr.Subtype != errs.SubtypeFailedPrecondition {
+			t.Fatalf("subtype = %q, want failed_precondition", verr.Subtype)
+		}
+		return verr.Hint
+	}
+
+	t.Run("config domain present: switch-policy pointer included", func(t *testing.T) {
+		policystate.ResetForTesting()
+		t.Cleanup(policystate.ResetForTesting)
+		if h := hintOf(t); !strings.Contains(h, "config strict-mode") {
+			t.Errorf("hint = %q, want it to reference `config strict-mode`", h)
+		}
+	})
+
+	t.Run("config domain plugin-denied: switch-policy pointer omitted", func(t *testing.T) {
+		policystate.ResetForTesting()
+		t.Cleanup(policystate.ResetForTesting)
+		policystate.SetPluginDeniedDomains(map[string]bool{"config": true})
+		if h := hintOf(t); strings.Contains(h, "config strict-mode") {
+			t.Errorf("hint = %q, want no `config strict-mode` pointer when config is plugin-denied", h)
+		}
+	})
 }

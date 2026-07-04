@@ -269,8 +269,9 @@ func mergeDenials(rules []*platform.Rule, denials []Decision) Decision {
 // so `--help` and similar remain available.
 //
 // source / ruleName populate PolicySource and RuleName on the produced
-// Denial values, so envelope output can attribute denials.
-func BuildDeniedByPath(root *cobra.Command, decisions map[string]Decision, source ResolveSource, ruleName string) map[string]Denial {
+// Denial values, so envelope output can attribute denials. deniedMessage
+// is build-level and applies uniformly, aggregates included.
+func BuildDeniedByPath(root *cobra.Command, decisions map[string]Decision, source ResolveSource, ruleName string, deniedMessage string) map[string]Denial {
 	out := map[string]Denial{}
 
 	sourceLabel := policySourceLabel(source)
@@ -287,6 +288,13 @@ func BuildDeniedByPath(root *cobra.Command, decisions map[string]Decision, sourc
 	}
 
 	aggregateParents(root, out)
+
+	if deniedMessage != "" {
+		for path, d := range out {
+			d.DeniedMessage = deniedMessage
+			out[path] = d
+		}
+	}
 	return out
 }
 

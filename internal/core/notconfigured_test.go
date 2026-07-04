@@ -42,6 +42,9 @@ func TestNotConfiguredError_Local(t *testing.T) {
 	if strings.Contains(cfgErr.Hint, "config bind") {
 		t.Errorf("local hint must not mention config bind; got %q", cfgErr.Hint)
 	}
+	if !HasConfigCommandRecoveryTarget(err) {
+		t.Error("canonical config recovery hint marker is missing")
+	}
 }
 
 func TestNotConfiguredError_OpenClaw(t *testing.T) {
@@ -103,6 +106,17 @@ func TestNoActiveProfileError_Local(t *testing.T) {
 	}
 	if cfgErr.Message != "no active profile" {
 		t.Errorf("message = %q, want %q", cfgErr.Message, "no active profile")
+	}
+	if !HasConfigCommandRecoveryTarget(err) {
+		t.Error("no-active-profile config recovery hint marker is missing")
+	}
+}
+
+func TestHasConfigCommandRecoveryTarget_RejectsUnrelatedNotConfigured(t *testing.T) {
+	err := errs.NewConfigError(errs.SubtypeNotConfigured, "profile missing").
+		WithHint("available profiles: production")
+	if HasConfigCommandRecoveryTarget(err) {
+		t.Fatal("unrelated not_configured hint was marked as a config command recovery")
 	}
 }
 

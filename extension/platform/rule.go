@@ -6,8 +6,9 @@ package platform
 // Rule is the declarative policy rule data structure. yaml files and
 // Plugin.Restrict() both produce the same Rule.
 //
-// At any moment there is at most one effective Rule -- the resolver decides
-// which source wins (Plugin > yaml > none). This package only defines the
+// At any moment there is at most one effective SOURCE of rules -- the
+// resolver decides which wins (Plugin > yaml > none); the winning source
+// may contribute several scoped rules. This package only defines the
 // shape; selection lives in internal/cmdpolicy.
 //
 // The four filter fields are joined by AND. See the engine's Evaluate for
@@ -57,4 +58,11 @@ type Rule struct {
 	// No yaml tag: yaml decoding lives in internal/cmdpolicy/yaml so
 	// platform stays free of a yaml library dependency.
 	AllowUnannotated bool `json:"allow_unannotated,omitempty"`
+
+	// DeniedMessage replaces the default "command not included in this
+	// build" message for plugin-denied commands. The message is
+	// build-level: the first non-empty DeniedMessage across the owning
+	// plugin's rules applies to every denial, so declare it once. yaml
+	// rules ignore it (they keep the command-denied presentation).
+	DeniedMessage string `json:"denied_message,omitempty"`
 }

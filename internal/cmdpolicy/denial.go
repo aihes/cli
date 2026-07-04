@@ -25,6 +25,10 @@ type Denial struct {
 	RuleName     string // matched Rule.Name (if any)
 	ReasonCode   string // closed enum, see docs/extension/reason-codes.md
 	Reason       string // human-readable
+
+	// DeniedMessage is Rule.DeniedMessage for the plugin-source
+	// unavailable presentation; empty means the default message.
+	DeniedMessage string
 }
 
 // ChildDenial is what AggregateChildren consumes — it pairs a Denial

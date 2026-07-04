@@ -36,8 +36,9 @@ type Builder struct {
 	version string
 	caps    Capabilities
 
-	actions []func(Registrar)
-	rules   []*Rule
+	actions       []func(Registrar)
+	rules         []*Rule
+	skillsOverlay *SkillsOverlay
 
 	hookNames map[string]bool
 	errs      []error
@@ -78,6 +79,15 @@ func (b *Builder) FailOpen() *Builder {
 // when Restrict() is called.
 func (b *Builder) FailClosed() *Builder {
 	b.caps.FailurePolicy = FailClosed
+	return b
+}
+
+// HideDiagnostics retires the policy self-inspection commands
+// (`config policy show`, `config plugins show`), which otherwise stay
+// executable under a plugin policy as the operator's escape hatch.
+// Requires Restrict() on the same plugin; Build fails otherwise.
+func (b *Builder) HideDiagnostics() *Builder {
+	b.caps.HideDiagnostics = true
 	return b
 }
 
@@ -145,6 +155,35 @@ func (b *Builder) Restrict(rule *Rule) *Builder {
 	return b
 }
 
+// EmbeddedSkills contributes a SkillsOverlay (see SkillsOverlay)
+// customizing the CLI's embedded skill content. Unlike Restrict it does
+// NOT imply FailClosed: skill customization is guidance content, not a
+// security boundary. A plugin owns at most one SkillsOverlay, so calling
+// EmbeddedSkills more than once is a build error.
+func (b *Builder) EmbeddedSkills(spec *SkillsOverlay) *Builder {
+	if spec == nil {
+		b.errs = append(b.errs, errors.New("EmbeddedSkills(nil): spec must not be nil"))
+		return b
+	}
+	if b.skillsOverlay != nil {
+		b.errs = append(b.errs, errors.New("EmbeddedSkills() called more than once; a plugin owns at most one SkillsOverlay"))
+		return b
+	}
+	b.skillsOverlay = cloneSkillsOverlay(spec)
+	return b
+}
+
+// cloneSkillsOverlay snapshots the caller's spec so a later mutation of the
+// same *SkillsOverlay cannot alter the staged copy. The Remove slice is
+// copied; Overlay/Base are fs.FS handles retained by reference (an fs.FS
+// is a read-only view, not caller-mutable state).
+func cloneSkillsOverlay(spec *SkillsOverlay) *SkillsOverlay {
+	cp := *spec
+	cp.Allow = append([]string(nil), spec.Allow...)
+	cp.Remove = append([]string(nil), spec.Remove...)
+	return &cp
+}
+
 // Build returns the configured Plugin, or an error if any builder
 // step found a fault. MustBuild panics on the same error.
 //
@@ -155,15 +194,20 @@ func (b *Builder) Build() (Plugin, error) {
 		b.errs = append(b.errs, errors.New(
 			"Restrict() requires FailClosed; do not call FailOpen() after Restrict()"))
 	}
+	if b.caps.HideDiagnostics && len(b.rules) == 0 {
+		b.errs = append(b.errs, errors.New(
+			"HideDiagnostics() requires Restrict(): there is no integrator policy to hide"))
+	}
 	if len(b.errs) > 0 {
 		return nil, errors.Join(b.errs...)
 	}
 	return &builtPlugin{
-		name:    b.name,
-		version: b.version,
-		caps:    b.caps,
-		actions: b.actions,
-		rules:   b.rules,
+		name:          b.name,
+		version:       b.version,
+		caps:          b.caps,
+		actions:       b.actions,
+		rules:         b.rules,
+		skillsOverlay: b.skillsOverlay,
 	}, nil
 }
 
@@ -202,11 +246,12 @@ func (b *Builder) validateHookName(hookName, kind string) bool {
 
 // builtPlugin is the Plugin implementation the builder emits.
 type builtPlugin struct {
-	name    string
-	version string
-	caps    Capabilities
-	actions []func(Registrar)
-	rules   []*Rule
+	name          string
+	version       string
+	caps          Capabilities
+	actions       []func(Registrar)
+	rules         []*Rule
+	skillsOverlay *SkillsOverlay
 }
 
 func (p *builtPlugin) Name() string               { return p.name }
@@ -215,6 +260,15 @@ func (p *builtPlugin) Capabilities() Capabilities { return p.caps }
 func (p *builtPlugin) Install(r Registrar) error {
 	for _, rule := range p.rules {
 		r.Restrict(rule)
+	}
+	if p.skillsOverlay != nil {
+		sr, ok := r.(EmbeddedSkillsRegistrar)
+		if !ok {
+			// Fail closed: a declared skill customization must never be
+			// silently dropped by a host that cannot honour it.
+			return errors.New("host registrar does not support EmbeddedSkills")
+		}
+		sr.EmbeddedSkills(p.skillsOverlay)
 	}
 	for _, action := range p.actions {
 		action(r)

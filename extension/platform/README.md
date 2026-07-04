@@ -60,6 +60,7 @@ You should see `audit` in the plugin list.
 | `Wrap`                     | Around each command's RunE         | Yes (return `*AbortError`)       |
 | `On(Startup/Shutdown)`     | Process lifecycle                  | N/A                              |
 | `Restrict(Rule)`           | Bootstrap-time, ≥1 per plugin      | Denies whole subtrees            |
+| `EmbeddedSkills(SkillsOverlay)`        | Bootstrap-time, ≤1 per plugin      | No (customizes embedded skills)  |
 
 ### Plugin lifecycle
 
@@ -79,7 +80,7 @@ sequenceDiagram
     Host->>SDK: InstallAll()
     SDK->>Plugin: Capabilities()
     SDK->>Plugin: Install(Registrar)
-    Plugin->>SDK: Observe / Wrap / Restrict / On(Startup,Shutdown)
+    Plugin->>SDK: Observe / Wrap / Restrict / EmbeddedSkills / On(Startup,Shutdown)
     SDK->>Plugin: On(Startup) fire
 
     Note over Host,Plugin: Each command dispatch
@@ -113,6 +114,43 @@ the rejected dispatch.
   widen another's policy). YAML policy at `~/.lark-cli/policy.yml` (which
   may itself list several rules under `rules:`) is shadowed by any plugin
   Restrict.
+- A plugin may call `EmbeddedSkills()` at most once to customize the embedded
+  skill tree — `Allow` keeps only the listed skills (the allow-list
+  counterpart of `Rule.Allow`, so a CLI upgrade cannot widen the build;
+  `Remove` wins over `Allow`, and `Overlay` entries are exempt), `Remove`
+  drops skills, `Overlay` adds/replaces ones, or swap the whole `Base` —
+  layered over the CLI default. Unlike `Restrict()`
+  it is NOT a security boundary and does not imply `FailClosed`: it
+  shapes fail-open guidance content. Removing a skill only drops its
+  `skills read` / `--help` guidance — it does NOT disable the matching
+  commands (use `Restrict()` for that). Only ONE plugin per binary may
+  contribute a `SkillsOverlay`; two DISTINCT plugins is a deliberate
+  `multiple_skills_overlay_plugins` error. The top-level skill set and
+  each skill's owning FS are snapshotted during CLI build; files inside an
+  owned skill directory remain live. Both `Base` and `Overlay` must
+  contain only valid skill directories with `SKILL.md`.
+- A command denied by a **plugin** Rule presents as absent, not as
+  forbidden: it leaves normal help and command-name completion, explicit
+  help on it is intercepted, and invoking it answers
+  `subtype=command_unavailable` with no policy vocabulary and no
+  recovery hint. Set
+  `Rule.DeniedMessage` to replace the default
+  "command not included in this build" with your product's own wording.
+  yaml-source denials keep the classic `command_denied` presentation —
+  the user owns that policy and needs to see how to adjust it. One
+  carve-out: a command already retired by the user's strict-mode setting
+  keeps its strict-mode identity error even when a plugin Rule also
+  matches it — strict-mode is a user-side security boundary and is never
+  re-labelled as absent. Denying a
+  whole domain also retires what points at it: `--profile` (profile
+  domain) hides and rejects use, the root-help skills footer (skills),
+  update notices (update), and the `auth login` recovery hint (auth)
+  stop rendering.
+- `config policy show` / `config plugins show` stay executable under any
+  plugin policy (hidden from help when their domain is denied) so an
+  operator can still inspect the rule that locked the build. An
+  integrator shipping a fully-managed distribution opts out with
+  `HideDiagnostics()` — requires `Restrict()` on the same plugin.
 - The `Wrap` factory runs **once per command dispatch**, not at
   install time. Long-lived state (clients, caches, metrics counters)
   must live on the Plugin struct or in package-level variables.
@@ -153,6 +191,8 @@ messages are localised and may change between releases.
 | `invalid_hook_registration` | Hook factory returns nil / Wrap chain re-entry / etc.                          | Yes                    |
 | `invalid_rule`              | Rule fails ValidateRule (malformed glob, bad MaxRisk, unknown Identity)        | Yes                    |
 | `multiple_restrict_plugins` | Two or more DISTINCT plugins each contributed Restrict (one plugin may contribute several rules) | Yes  |
+| `invalid_skills_overlay`        | Staging fault (`EmbeddedSkills(nil)` / second call in one plugin) honours FailurePolicy; a `SkillsOverlay` that can't compose (`Remove` names a skill absent from the base, `Overlay` entry lacks `SKILL.md`) always aborts via a fatal dispatch guard | Mixed — see left |
+| `multiple_skills_overlay_plugins` | Two or more DISTINCT plugins each contributed a `SkillsOverlay` (only one may own skill content)  | No — always aborts (dispatch guard) |
 | `install_failed`            | `Plugin.Install` returned a non-nil error                                      | Yes                    |
 | `install_panic`             | `Plugin.Install` panicked                                                      | Yes                    |
 
@@ -187,8 +227,8 @@ should additionally check `detail.layer == "policy"`.
 - [Runnable example: audit observer](./examples/audit-observer/)
 - [Runnable example: read-only policy](./examples/readonly-policy/)
 - Builder API: see [`builder.go`](./builder.go) for the full DSL
-  (`NewPlugin`, `Observer`, `Wrap`, `Restrict`, `FailOpen`/`FailClosed`,
-  `MustBuild`).
+  (`NewPlugin`, `Observer`, `Wrap`, `Restrict`, `EmbeddedSkills`,
+  `HideDiagnostics`, `FailOpen`/`FailClosed`, `MustBuild`).
 - Inventory diagnostic: run `lark-cli config plugins show` after
   installing your plugin to see hooks/rules attributed to your plugin
   name.

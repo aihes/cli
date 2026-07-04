@@ -70,7 +70,7 @@ func TestBuildDeniedByPath_parentAggregationAllChildrenDenied(t *testing.T) {
 	}
 
 	denied := cmdpolicy.BuildDeniedByPath(root, decisions,
-		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: "/policy.yml"}, "agent")
+		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: "/policy.yml"}, "agent", "")
 
 	// Both leaves denied.
 	if _, ok := denied["im/+send"]; !ok {
@@ -110,7 +110,7 @@ func TestBuildDeniedByPath_partialDenialKeepsParent(t *testing.T) {
 		Deny:  []string{"docs/+delete"},
 	})
 	denied := cmdpolicy.BuildDeniedByPath(root, e.EvaluateAll(root),
-		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourcePlugin, Name: "secaudit"}, "secaudit-policy")
+		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourcePlugin, Name: "secaudit"}, "secaudit-policy", "")
 
 	if _, ok := denied["docs"]; ok {
 		t.Errorf("parent 'docs' must NOT be denied when some children are allowed")
@@ -129,7 +129,7 @@ func TestBuildDeniedByPath_rootNeverDenied(t *testing.T) {
 	root := buildTree()
 	e := cmdpolicy.New(&platform.Rule{Allow: []string{"nonexistent/**"}})
 	denied := cmdpolicy.BuildDeniedByPath(root, e.EvaluateAll(root),
-		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: "/p.yml"}, "")
+		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: "/p.yml"}, "", "")
 
 	// Every leaf should be denied. We do not assert on the root entry
 	// because Apply skips the root regardless; the contract is "root
@@ -156,7 +156,7 @@ func TestBuildDeniedByPath_hybridParentOwnAllowedKeepsAlive(t *testing.T) {
 		Allow: []string{"docs"},
 	})
 	denied := cmdpolicy.BuildDeniedByPath(root, e.EvaluateAll(root),
-		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: ""}, "")
+		cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML, Name: ""}, "", "")
 
 	// docs/+delete denied (path doesn't match Allow=["docs"]).
 	if _, ok := denied["docs/+delete"]; !ok {
@@ -170,13 +170,13 @@ func TestBuildDeniedByPath_hybridParentOwnAllowedKeepsAlive(t *testing.T) {
 
 // Apply returns a typed *errs.ValidationError that exposes BOTH paths
 // consumers rely on:
-//  1. cmd/root.go's envelope writer (errs.ProblemOf / failed_precondition
-//     subtype + exit code 2)
+//  1. cmd/root.go's envelope writer (errs.ProblemOf; plugin-source
+//     denials use subtype command_unavailable + exit code 2)
 //  2. in-process consumers extracting the platform.CommandDeniedError as
 //     the typed error's Cause via errors.As
 //
-// The policy metadata (layer / policy_source / rule_name / reason_code)
-// is folded into the Hint text rather than a separate detail map.
+// Plugin-source denials keep the policy metadata OFF the wire (no hint,
+// no source / rule vocabulary); it stays reachable on the Cause only.
 func TestApply_runEReturnsExitErrorAndCommandDeniedError(t *testing.T) {
 	root := buildTree()
 	denied := map[string]cmdpolicy.Denial{
@@ -196,29 +196,31 @@ func TestApply_runEReturnsExitErrorAndCommandDeniedError(t *testing.T) {
 		t.Fatalf("denied command should return error")
 	}
 
-	// Path 1: typed-envelope view. The denial is a failed_precondition
-	// ValidationError so cmd/root.go renders the structured envelope and
-	// the process exits 2 (ExitValidation).
+	// Path 1: typed-envelope view. A plugin-source denial presents as
+	// "command unavailable": the capability is absent from this build, so
+	// the envelope carries no policy metadata and no recovery hint.
 	var ve *errs.ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("error chain must contain *errs.ValidationError, got %T", err)
 	}
-	if ve.Subtype != errs.SubtypeFailedPrecondition {
-		t.Errorf("subtype = %q, want %q", ve.Subtype, errs.SubtypeFailedPrecondition)
+	if ve.Subtype != errs.SubtypeCommandUnavailable {
+		t.Errorf("subtype = %q, want %q", ve.Subtype, errs.SubtypeCommandUnavailable)
 	}
 	if code := output.ExitCodeOf(err); code != output.ExitValidation {
 		t.Errorf("exit code = %d, want ExitValidation (%d)", code, output.ExitValidation)
 	}
-	// The policy metadata is folded into the Hint text: reason_code,
-	// policy_source, and rule_name must all be discoverable there.
-	if !strings.Contains(ve.Hint, "write_not_allowed") {
-		t.Errorf("hint must carry reason_code write_not_allowed, got %q", ve.Hint)
+	if ve.Message != cmdpolicy.DefaultUnavailableMessage {
+		t.Errorf("message = %q, want default unavailable message", ve.Message)
 	}
-	if !strings.Contains(ve.Hint, "plugin:secaudit") {
-		t.Errorf("hint must carry policy_source plugin:secaudit, got %q", ve.Hint)
+	// No hint, no policy vocabulary: the wire must not steer the caller
+	// toward a policy the integrator locked into the build.
+	if ve.Hint != "" {
+		t.Errorf("plugin-source denial must carry no hint, got %q", ve.Hint)
 	}
-	if !strings.Contains(ve.Hint, "secaudit-policy") {
-		t.Errorf("hint must carry rule_name secaudit-policy, got %q", ve.Hint)
+	for _, leak := range []string{"policy", "plugin:secaudit", "secaudit-policy", "write_not_allowed"} {
+		if strings.Contains(ve.Message, leak) {
+			t.Errorf("message leaks %q: %q", leak, ve.Message)
+		}
 	}
 
 	// Path 2: in-process typed-error view -- the *platform.CommandDeniedError
@@ -301,7 +303,7 @@ func TestHasRunnableDescendant_ignoresAnnotatedPureGroup(t *testing.T) {
 
 	e := cmdpolicy.New(&platform.Rule{MaxRisk: "read"})
 	decisions := e.EvaluateAll(root)
-	denied := cmdpolicy.BuildDeniedByPath(root, decisions, cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML}, "")
+	denied := cmdpolicy.BuildDeniedByPath(root, decisions, cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML}, "", "")
 
 	if _, ok := denied["docs"]; !ok {
 		t.Fatalf("docs should be aggregated as fully denied (pure-group children excluded from live count); map=%+v", denied)
@@ -332,7 +334,7 @@ func TestBuildDeniedByPath_aggregatesAnnotatedPureGroup(t *testing.T) {
 
 	e := cmdpolicy.New(&platform.Rule{MaxRisk: "read"})
 	decisions := e.EvaluateAll(root)
-	denied := cmdpolicy.BuildDeniedByPath(root, decisions, cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML}, "")
+	denied := cmdpolicy.BuildDeniedByPath(root, decisions, cmdpolicy.ResolveSource{Kind: cmdpolicy.SourceYAML}, "", "")
 
 	if _, ok := denied["drive"]; !ok {
 		t.Fatalf("aggregator must install drive denial when all children denied; map=%+v", denied)

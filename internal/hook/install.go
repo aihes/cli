@@ -107,7 +107,11 @@ func wrapRunE(cmd *cobra.Command, reg *Registry, snapshot CommandViewSource) {
 		// If denied, run the originalRunE directly (it is the denyStub
 		// installed by cmdpolicy.Apply). The Wrap chain is bypassed.
 		var err error
-		if inv.DeniedByPolicy() {
+		if inv.DeniedByPolicy() || isFrameworkMeta(c) {
+			// Framework meta commands (help) are presentation, not
+			// business dispatch: a plugin Wrapper must not swallow or
+			// rewrite their result (e.g. the command_unavailable answer
+			// for a restricted target). Observers above still ran.
 			err = invokeOriginal(ctx, c, args, originalRunE, originalRun)
 		} else {
 			// Compose matching Wrappers around the originalRunE. Each
@@ -334,6 +338,13 @@ var stderr = func() interface{ Write(p []byte) (int, error) } {
 //
 // This indirection lets us avoid an import cycle between hook and
 // pruning packages.
+// isFrameworkMeta reports whether the command is a framework meta command
+// (stamped by cmd's installHelpCommand). Key duplicated by value, matching
+// the denial keys below: hook sits beneath cmdpolicy in the import graph.
+func isFrameworkMeta(c *cobra.Command) bool {
+	return c.Annotations["lark:framework_meta"] == "true"
+}
+
 func populateInvocationDenial(inv *invocation, c *cobra.Command) {
 	const layerKey = "lark:policy_denied_layer"
 	const sourceKey = "lark:policy_denied_source"

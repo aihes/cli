@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -18,9 +19,11 @@ import (
 	"github.com/larksuite/cli/internal/cmdmeta"
 	"github.com/larksuite/cli/internal/cmdpolicy"
 	"github.com/larksuite/cli/internal/cmdutil"
+	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/deprecation"
 	"github.com/larksuite/cli/internal/hook"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/policystate"
 	"github.com/larksuite/cli/internal/skillscheck"
 	"github.com/larksuite/cli/internal/suggest"
 	"github.com/larksuite/cli/internal/update"
@@ -80,10 +83,15 @@ Global Flags:
 Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
   {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
 
-Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}{{if not .HasParent}}
-
-Skills setup (one-time, humans): npx skills add larksuite/cli -g -y — https://github.com/larksuite/cli#agent-skills{{end}}
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}` + skillsSetupFooter + `
 `
+
+// skillsSetupFooter is the root-help pointer at the human one-time skills
+// setup. Split out so the presentation pass can drop it from the template
+// when an integrator plugin denies the skills domain.
+const skillsSetupFooter = `{{if not .HasParent}}
+
+Skills setup (one-time, humans): npx skills add larksuite/cli -g -y — https://github.com/larksuite/cli#agent-skills{{end}}`
 
 // Execute runs the root command and returns the process exit code.
 // rawInvocationArgs holds os.Args[1:] captured at Execute() entry. cobra's
@@ -95,9 +103,13 @@ var rawInvocationArgs []string
 
 func Execute() int {
 	rawInvocationArgs = os.Args[1:]
-	inv, err := BootstrapInvocationContext(os.Args[1:])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+	// Bootstrap parsing is best-effort: Cobra must render any flag error after
+	// the command tree and plugin presentation gates are installed. Returning
+	// here would leak a plain-text error for a policy-retired global flag before
+	// its gate can present the flag as absent.
+	inv, bootstrapErr := BootstrapInvocationContext(os.Args[1:])
+	if bootstrapErr != nil && !isDeferredBootstrapProfileError(bootstrapErr) {
+		fmt.Fprintln(os.Stderr, "Error:", bootstrapErr)
 		return 1
 	}
 	configureFlagCompletions(os.Args)
@@ -129,6 +141,16 @@ func Execute() int {
 		return handleRootError(f, runErr)
 	}
 	return 0
+}
+
+// isDeferredBootstrapProfileError identifies the one bootstrap parse failure
+// the completed Cobra tree must render. Bootstrap only registers --profile;
+// deferring its missing-value error lets a plugin-retired flag present as
+// absent, while an ordinary build still emits Cobra's typed needs-argument
+// envelope. Any future bootstrap error keeps the existing early-fail behavior
+// until its full-tree equivalence is explicitly established.
+func isDeferredBootstrapProfileError(err error) bool {
+	return err != nil && err.Error() == "flag needs an argument: --profile"
 }
 
 // setupNotices wires both the binary update notice and the skills
@@ -168,6 +190,10 @@ func setupNotices() {
 // Extracted from Execute so the composition is unit-testable.
 func composePendingNotice() map[string]interface{} {
 	notice := map[string]interface{}{}
+	// All three notices steer the caller to `lark-cli update`.
+	if policystate.DomainDeniedByPlugin("update") {
+		return nil
+	}
 	if info := update.GetPending(); info != nil {
 		notice["update"] = map[string]interface{}{
 			"current": info.Current,
@@ -254,6 +280,7 @@ func handleRootError(f *cmdutil.Factory, err error) int {
 	// local shortcut/service metadata — it never depends on server state.
 	if !errs.IsRaw(err) {
 		applyNeedAuthorizationHint(f, err)
+		applyPolicyRecoveryHintGate(err)
 	}
 
 	// Staged dispatch: capture the typed exit code BEFORE attempting the
@@ -301,6 +328,26 @@ func handleRootError(f *cmdutil.Factory, err error) int {
 	}
 	output.WriteTypedErrorEnvelope(errOut, fallback, string(f.ResolvedIdentity))
 	return output.ExitCodeOf(fallback)
+}
+
+// applyPolicyRecoveryHintGate is the final presentation guard for typed errors
+// created before plugin policy is installed. Credential resolution runs early
+// to determine strict mode and caches its result; a not-configured error can
+// therefore retain a config-init hint that was valid at construction time but
+// points at a command the completed build retired. Gate on typed metadata at
+// the envelope boundary instead of parsing or rewriting prose.
+func applyPolicyRecoveryHintGate(err error) {
+	if errs.IsRaw(err) {
+		return
+	}
+	p, ok := errs.ProblemOf(err)
+	if !ok || p.Hint == "" {
+		return
+	}
+	if p.Category == errs.CategoryConfig && p.Subtype == errs.SubtypeNotConfigured &&
+		core.HasConfigCommandRecoveryTarget(err) && policystate.DomainDeniedByPlugin("config") {
+		p.Hint = ""
+	}
 }
 
 // cobraUsageErrorMarkers are the stable error-text fragments cobra / pflag
@@ -601,6 +648,15 @@ func isLarkDomain(c *cobra.Command) bool {
 func flagDidYouMean(c *cobra.Command, ferr error) error {
 	name, isUnknown := unknownFlagName(ferr)
 	if !isUnknown {
+		// A policy-gated flag invoked bare ("flag needs an argument")
+		// never reaches its rejecting Value; it still presents as
+		// unregistered, exactly like a set one.
+		if gated, ok := gatedFlagFromNeedsArg(c, ferr); ok {
+			return errs.NewValidationError(errs.SubtypeInvalidArgument,
+				"unknown flag %q for %q", "--"+gated, c.CommandPath()).
+				WithParams(errs.InvalidParam{Name: "--" + gated, Reason: "unknown flag"}).
+				WithHint("run `%s --help` to see valid flags", c.CommandPath())
+		}
 		return errs.NewValidationError(errs.SubtypeInvalidArgument, "%s", ferr.Error()).
 			WithHint("run `%s --help` for valid flags", c.CommandPath())
 	}
@@ -621,6 +677,25 @@ func flagDidYouMean(c *cobra.Command, ferr error) error {
 		"unknown flag %q for %q", "--"+name, c.CommandPath()).
 		WithParams(errs.InvalidParam{Name: "--" + name, Reason: "unknown flag", Suggestions: suggestions}).
 		WithHint("%s", hint)
+}
+
+// gatedFlagFromNeedsArg reports whether ferr is pflag's "flag needs an
+// argument: --name" for a policy-gated flag on this command's flag set.
+func gatedFlagFromNeedsArg(c *cobra.Command, ferr error) (string, bool) {
+	const p = "flag needs an argument: --"
+	msg := ferr.Error()
+	i := strings.Index(msg, p)
+	if i < 0 {
+		return "", false
+	}
+	name := msg[i+len(p):]
+	if j := strings.IndexAny(name, " \t"); j >= 0 {
+		name = name[:j]
+	}
+	if fl := c.Root().PersistentFlags().Lookup(name); isPolicyGatedFlag(fl) {
+		return name, true
+	}
+	return "", false
 }
 
 // unknownFlagName extracts the offending long-flag name from cobra's flag-parse
@@ -659,16 +734,104 @@ func visibleFlagNames(c *cobra.Command) []string {
 	return names
 }
 
+// installHelpCommand replaces cobra's default help command so that
+// `lark-cli help <plugin-restricted-cmd>` returns a typed error (exit 2)
+// instead of printing an envelope and exiting 0 — cobra's stock help
+// command has no error channel.
+func installHelpCommand(root *cobra.Command) {
+	helpCmd := &cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		Long: "Help provides help for any command in the application.\n" +
+			"Simply type " + root.DisplayName() + " help [path to command] for full details.",
+		ValidArgsFunction: func(c *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			// Mirrors cobra's stock help completion: available (non-hidden)
+			// subcommands of the resolved path — a denied command is
+			// Hidden and therefore never offered.
+			cmd, _, e := root.Find(args)
+			if e != nil || cmd == nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			var comps []string
+			for _, sub := range cmd.Commands() {
+				if !sub.IsAvailableCommand() && sub.Name() != "help" {
+					continue
+				}
+				if strings.HasPrefix(sub.Name(), toComplete) {
+					comps = append(comps, sub.Name()+"\t"+sub.Short)
+				}
+			}
+			return comps, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(c *cobra.Command, args []string) error {
+			target, _, err := root.Find(args)
+			if err != nil || target == nil {
+				c.Printf("Unknown help topic %#q\n", args)
+				return root.Usage()
+			}
+			if msg, ok := unavailableHelpMessage(target); ok {
+				return errs.NewValidationError(errs.SubtypeCommandUnavailable, "%s", msg)
+			}
+			target.InitDefaultHelpFlag()
+			target.InitDefaultVersionFlag()
+			return target.Help()
+		},
+	}
+	// help attaches after policy evaluation (framework meta command, never
+	// policy-evaluated). No risk annotation: it would render a "Risk:"
+	// line that stock cobra help output does not carry.
+	cmdutil.DisableAuthCheck(helpCmd)
+	if helpCmd.Annotations == nil {
+		helpCmd.Annotations = map[string]string{}
+	}
+	helpCmd.Annotations[cmdpolicy.AnnotationFrameworkMeta] = "true"
+	root.SetHelpCommand(helpCmd)
+	// SetHelpCommand alone defers attachment to Execute's
+	// InitDefaultHelpCmd; add it now so the built tree is complete
+	// (InitDefaultHelpCmd re-adds idempotently).
+	root.AddCommand(helpCmd)
+}
+
+// unavailableHelpMessage returns the message to render in place of help
+// for a plugin-restricted command. yaml-source denials keep original help.
+func unavailableHelpMessage(cmd *cobra.Command) (string, bool) {
+	if cmd == nil || cmd.Annotations == nil {
+		return "", false
+	}
+	if cmd.Annotations[cmdpolicy.AnnotationDenialLayer] != cmdpolicy.LayerPolicy ||
+		!cmdpolicy.IsPluginPolicySource(cmd.Annotations[cmdpolicy.AnnotationDenialSource]) {
+		return "", false
+	}
+	if msg := cmd.Annotations[cmdpolicy.AnnotationDenialMessage]; msg != "" {
+		return msg, true
+	}
+	return cmdpolicy.DefaultUnavailableMessage, true
+}
+
 // installTipsHelpFunc wraps the default help function to append a TIPS section
 // when a command has tips set via cmdutil.SetTips. It also force-shows global
 // flags that are normally hidden in single-app mode (currently --profile)
 // when rendering the root command's own help, so users discovering the CLI
 // still see them at `lark-cli --help`.
-func installTipsHelpFunc(root *cobra.Command) {
+//
+// skillContent is read lazily at help-render time (not captured up front) so
+// the domain-guide pointer reflects the resolved skill tree -- the same
+// f.SkillContent that `skills list`/`read` serve -- even though plugin skill
+// customization is applied after this help func is installed.
+func installTipsHelpFunc(root *cobra.Command, skillContent func() fs.FS) {
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		// Explicit help on a plugin-restricted command answers the same
+		// unavailable envelope as its RunE stub, not the original usage.
+		if msg, ok := unavailableHelpMessage(cmd); ok {
+			output.WriteTypedErrorEnvelope(cmd.ErrOrStderr(),
+				errs.NewValidationError(errs.SubtypeCommandUnavailable, "%s", msg), "")
+			return
+		}
 		if cmd == root {
-			if f := root.PersistentFlags().Lookup("profile"); f != nil && f.Hidden {
+			// Force-show flags hidden by single-app mode; never a
+			// policy-retired one.
+			if f := root.PersistentFlags().Lookup("profile"); f != nil && f.Hidden && !isPolicyGatedFlag(f) {
 				f.Hidden = false
 				defer func() { f.Hidden = true }()
 			}
@@ -676,15 +839,15 @@ func installTipsHelpFunc(root *cobra.Command) {
 		// Domain and method commands compose their agent guidance into Long lazily
 		// here (shortcuts attach after service registration); both skip the generic
 		// bottom-of-help append below.
-		if service.PrepareDomainHelp(cmd, embeddedSkillContent) {
+		if service.PrepareDomainHelp(cmd, skillContent()) {
 			defaultHelp(cmd, args)
 			return
 		}
-		if service.PrepareMethodHelp(cmd, embeddedSkillContent) {
+		if service.PrepareMethodHelp(cmd, skillContent()) {
 			defaultHelp(cmd, args)
 			return
 		}
-		if service.PrepareShortcutHelp(cmd, embeddedSkillContent) {
+		if service.PrepareShortcutHelp(cmd, skillContent()) {
 			defaultHelp(cmd, args)
 			return
 		}

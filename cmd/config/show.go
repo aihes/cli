@@ -13,6 +13,7 @@ import (
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/policystate"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +56,12 @@ func configShowRun(opts *ConfigShowOptions) error {
 	}
 	app := config.CurrentAppConfig(f.Invocation.Profile)
 	if app == nil {
-		return errs.NewConfigError(errs.SubtypeNotConfigured, "no active profile").WithHint("run: lark-cli profile list")
+		e := errs.NewConfigError(errs.SubtypeNotConfigured, "no active profile")
+		// No recovery hint when the profile domain is absent from this build.
+		if !policystate.DomainDeniedByPlugin("profile") {
+			e = e.WithHint("run: lark-cli profile list")
+		}
+		return e
 	}
 	users := "(no logged-in users)"
 	if len(app.Users) > 0 {

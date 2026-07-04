@@ -13,6 +13,7 @@ import (
 	"github.com/larksuite/cli/internal/cmdpolicy"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
+	"github.com/larksuite/cli/internal/policystate"
 )
 
 // pruneForStrictMode removes commands incompatible with the active strict mode.
@@ -105,8 +106,14 @@ func strictModeStubFrom(child *cobra.Command, mode core.StrictMode) *cobra.Comma
 		},
 		RunE: func(c *cobra.Command, _ []string) error {
 			cd := cmdpolicy.CommandDeniedFromDenial(cmdpolicy.CanonicalPath(c), denial)
+			hint := fmt.Sprintf("denied by %s policy (reason_code %s)", cd.Layer, cd.ReasonCode)
+			// The switch-policy pointer names `config strict-mode`; with
+			// the config domain plugin-denied it would be a dead end.
+			if !policystate.DomainDeniedByPlugin("config") {
+				hint += "; " + stubHint
+			}
 			return errs.NewValidationError(errs.SubtypeFailedPrecondition, "%s", stubMessage).
-				WithHint("denied by %s policy (reason_code %s); %s", cd.Layer, cd.ReasonCode, stubHint).
+				WithHint("%s", hint).
 				WithCause(cd)
 		},
 	}

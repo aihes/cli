@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/larksuite/cli/errs"
+	"github.com/larksuite/cli/internal/policystate"
 )
 
 // isMalformedConfigError reports whether a config load failure indicates a
@@ -66,6 +67,19 @@ const (
 	agentBindHint = "read `lark-cli config bind --help`, then ask the user to confirm intent and identity preset (bot-only or user-default); only after both are confirmed, run `lark-cli config bind`"
 )
 
+// errConfigCommandRecoveryHint marks canonical recovery guidance whose target
+// is a config command. It stays in the cause chain (never on the wire) so the
+// root dispatcher can remove a hint created before plugin presentation when
+// the completed build no longer ships that recovery command. Other errors that
+// share the not_configured subtype keep their independent hints.
+var errConfigCommandRecoveryHint = errors.New("recovery hint targets a config command")
+
+// HasConfigCommandRecoveryTarget reports whether err's canonical recovery
+// action targets config init/bind. The hint itself may already be hidden.
+func HasConfigCommandRecoveryTarget(err error) bool {
+	return errors.Is(err, errConfigCommandRecoveryHint)
+}
+
 // NotConfiguredError returns the canonical "not configured" error, with a
 // hint that depends on the active workspace:
 //
@@ -81,14 +95,24 @@ const (
 func NotConfiguredError() error {
 	ws := CurrentWorkspace()
 	if ws.IsLocal() {
-		return errs.NewConfigError(errs.SubtypeNotConfigured, "not configured").
-			WithHint("%s", localInitHint)
+		e := errs.NewConfigError(errs.SubtypeNotConfigured, "not configured").
+			WithCause(errConfigCommandRecoveryHint)
+		// With the config domain absent from this build the init/bind
+		// commands do not exist; no hint beats a dead-end hint.
+		if !policystate.DomainDeniedByPlugin("config") {
+			e = e.WithHint("%s", localInitHint)
+		}
+		return e
 	}
 	// Agent workspace: the workspace name appears only in the message, never
 	// in the wire subtype, which stays not_configured.
-	return errs.NewConfigError(errs.SubtypeNotConfigured,
+	e := errs.NewConfigError(errs.SubtypeNotConfigured,
 		"%s context detected but lark-cli is not bound to it", ws.Display()).
-		WithHint("%s", agentBindHint)
+		WithCause(errConfigCommandRecoveryHint)
+	if !policystate.DomainDeniedByPlugin("config") {
+		e = e.WithHint("%s", agentBindHint)
+	}
+	return e
 }
 
 // reconfigureHint returns the workspace-aware "fix it from scratch" hint
@@ -111,9 +135,11 @@ func NoActiveProfileError() error {
 	ws := CurrentWorkspace()
 	if ws.IsLocal() {
 		return errs.NewConfigError(errs.SubtypeNotConfigured, "no active profile").
-			WithHint("%s", localInitHint)
+			WithHint("%s", localInitHint).
+			WithCause(errConfigCommandRecoveryHint)
 	}
 	return errs.NewConfigError(errs.SubtypeNotConfigured,
 		"no active profile in %s workspace", ws.Display()).
-		WithHint("%s", agentBindHint)
+		WithHint("%s", agentBindHint).
+		WithCause(errConfigCommandRecoveryHint)
 }

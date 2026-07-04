@@ -9,6 +9,7 @@ import (
 
 	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/policystate"
 )
 
 const (
@@ -41,11 +42,15 @@ func (e *NeedAuthorizationError) Error() string {
 // legacy *NeedAuthorizationError sentinel is preserved in the Cause chain for
 // errors.As / errors.Is traversal.
 func NewNeedUserAuthorizationError(userOpenID string) *errs.AuthenticationError {
-	return errs.NewAuthenticationError(errs.SubtypeTokenMissing,
+	e := errs.NewAuthenticationError(errs.SubtypeTokenMissing,
 		"%s (user: %s)", needUserAuthorizationMarker, userOpenID).
 		WithUserOpenID(userOpenID).
-		WithHint("run: lark-cli auth login to re-authorize").
 		WithCause(&NeedAuthorizationError{UserOpenId: userOpenID})
+	// No recovery hint when the auth domain is absent from this build.
+	if !policystate.DomainDeniedByPlugin("auth") {
+		e = e.WithHint("run: lark-cli auth login to re-authorize")
+	}
+	return e
 }
 
 // IsNeedUserAuthorizationError reports whether err represents a missing-UAT

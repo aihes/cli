@@ -431,3 +431,84 @@ func TestInstallAll_multipleRestrictPerPlugin(t *testing.T) {
 			result.PluginRules[0].Rule.Name, result.PluginRules[1].Rule.Name)
 	}
 }
+
+// skillPlugin contributes a SkillsOverlay via r.EmbeddedSkills; the install pipeline
+// must capture it into PluginSkills for the skill resolver.
+type skillPlugin struct{}
+
+func (skillPlugin) Name() string    { return "skiller" }
+func (skillPlugin) Version() string { return "1.0.0" }
+func (skillPlugin) Capabilities() platform.Capabilities {
+	return platform.Capabilities{FailurePolicy: platform.FailOpen}
+}
+func (skillPlugin) Install(r platform.Registrar) error {
+	sr, ok := r.(platform.EmbeddedSkillsRegistrar)
+	if !ok {
+		return errors.New("host registrar does not support EmbeddedSkills")
+	}
+	sr.EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-shared"}})
+	return nil
+}
+
+func TestInstallAll_skillsCommitted(t *testing.T) {
+	result, err := internalplatform.InstallAll([]platform.Plugin{skillPlugin{}}, nil)
+	if err != nil {
+		t.Fatalf("InstallAll: %v", err)
+	}
+	if len(result.PluginSkills) != 1 {
+		t.Fatalf("PluginSkills = %d, want 1", len(result.PluginSkills))
+	}
+	ps := result.PluginSkills[0]
+	if ps.PluginName != "skiller" {
+		t.Errorf("PluginName = %q, want skiller", ps.PluginName)
+	}
+	if ps.SkillsOverlay == nil || len(ps.SkillsOverlay.Remove) != 1 || ps.SkillsOverlay.Remove[0] != "lark-shared" {
+		t.Errorf("Spec = %+v, want Remove=[lark-shared]", ps.SkillsOverlay)
+	}
+}
+
+// doubleSkillPlugin calls r.EmbeddedSkills twice; staging must reject it. Declared
+// FailClosed so the staging error aborts InstallAll deterministically.
+type doubleSkillPlugin struct{}
+
+func (doubleSkillPlugin) Name() string    { return "double-skiller" }
+func (doubleSkillPlugin) Version() string { return "1.0.0" }
+func (doubleSkillPlugin) Capabilities() platform.Capabilities {
+	return platform.Capabilities{FailurePolicy: platform.FailClosed}
+}
+func (doubleSkillPlugin) Install(r platform.Registrar) error {
+	sr := r.(platform.EmbeddedSkillsRegistrar)
+	sr.EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-a"}})
+	sr.EmbeddedSkills(&platform.SkillsOverlay{Remove: []string{"lark-b"}})
+	return nil
+}
+
+func TestInstallAll_skillsCalledTwice_aborts(t *testing.T) {
+	_, err := internalplatform.InstallAll([]platform.Plugin{doubleSkillPlugin{}}, nil)
+	if err == nil {
+		t.Fatal("calling r.EmbeddedSkills twice must abort a FailClosed plugin")
+	}
+	var pi *internalplatform.PluginInstallError
+	if !errors.As(err, &pi) || pi.ReasonCode != internalplatform.ReasonInvalidSkillsOverlay {
+		t.Errorf("err = %v, want PluginInstallError reason_code %s", err, internalplatform.ReasonInvalidSkillsOverlay)
+	}
+}
+
+// hideDiagnosticsOnlyPlugin declares HideDiagnostics without Restricts —
+// an authoring error the host rejects unconditionally.
+type hideDiagnosticsOnlyPlugin struct{}
+
+func (hideDiagnosticsOnlyPlugin) Name() string    { return "hider" }
+func (hideDiagnosticsOnlyPlugin) Version() string { return "1.0.0" }
+func (hideDiagnosticsOnlyPlugin) Capabilities() platform.Capabilities {
+	return platform.Capabilities{HideDiagnostics: true, FailurePolicy: platform.FailOpen}
+}
+func (hideDiagnosticsOnlyPlugin) Install(platform.Registrar) error { return nil }
+
+func TestInstallAll_hideDiagnosticsRequiresRestricts(t *testing.T) {
+	_, err := internalplatform.InstallAll([]platform.Plugin{hideDiagnosticsOnlyPlugin{}}, nil)
+	var pi *internalplatform.PluginInstallError
+	if !errors.As(err, &pi) || pi.ReasonCode != internalplatform.ReasonInvalidCapability {
+		t.Fatalf("HideDiagnostics without Restricts must abort with invalid_capability, got %v", err)
+	}
+}
