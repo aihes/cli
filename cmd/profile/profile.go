@@ -14,6 +14,13 @@ func NewCmdProfile(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
 		Short: "Manage configuration profiles",
+		Long: `Profiles are named app identities managed by lark-cli.
+
+Profile selection:
+  --profile <name>             Use a profile for this command only.
+  LARKSUITE_CLI_PROFILE        Use a profile for the current shell / agent session.
+  lark-cli whoami --json       Show which identity is actually used.
+  unset LARKSUITE_CLI_PROFILE  Clear the session profile and fall back to direct app env or configured default.`,
 	}
 	cmdutil.DisableAuthCheck(cmd)
 	cmdutil.SetTips(cmd, []string{

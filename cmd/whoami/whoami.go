@@ -68,6 +68,10 @@ func NewCmdWhoami(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current effective identity, app, profile, and token status (JSON)",
+		Long: `Show the effective app identity used by this invocation. This is not OAuth login status;
+use ` + "`lark-cli auth status --json`" + ` for OAuth user/token state.
+The JSON output includes credentialSource, appId, brand, and whether direct app credential
+env is present and matches the selected profile.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return whoamiRun(cmd, opts)
 		},

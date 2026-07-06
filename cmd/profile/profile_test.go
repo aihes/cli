@@ -627,6 +627,19 @@ func TestProfileRemoveRun_ValidationErrors(t *testing.T) {
 	})
 }
 
+// TestProfileHelpHasSelectionSection asserts `profile --help` documents the
+// per-invocation flag and session-scoped env var for selecting a profile, so
+// users and AI agents can find LARKSUITE_CLI_PROFILE without reading source.
+func TestProfileHelpHasSelectionSection(t *testing.T) {
+	cmd := NewCmdProfile(nil)
+	if !strings.Contains(cmd.Long, "Profile selection:") {
+		t.Errorf("profile --help missing Profile selection section")
+	}
+	if !strings.Contains(cmd.Long, "LARKSUITE_CLI_PROFILE") {
+		t.Errorf("profile --help missing LARKSUITE_CLI_PROFILE")
+	}
+}
+
 func TestProfileListRun_InvalidConfigReturnsValidationError(t *testing.T) {
 	dir := setupProfileConfigDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{invalid json"), 0600); err != nil {
