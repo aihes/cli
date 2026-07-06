@@ -128,7 +128,7 @@ lark-cli auth login --device-code <device_code>
 
 ## Profile 选择
 
-Profile selection: lark-cli supports temporary profile selection and identity diagnostics. For profile, tenant, or app-identity requests, check `lark-cli profile --help`; when identity looks wrong, run `lark-cli whoami --json`. Use `LARKSUITE_CLI_PROFILE` for a task/session profile, `--profile` for one command, and `unset LARKSUITE_CLI_PROFILE` when the task no longer wants the session profile. Do not run `lark-cli profile use` unless the user explicitly asks to change the long-term default. When a task or session should use a specific identity, actually establish it (or ask the user for the profile name if it is unknown) — never merely say you will use it, or later commands silently run as the wrong identity. To make a session profile actually take effect: if your shell/runtime persists env across commands, `export LARKSUITE_CLI_PROFILE=<name>` once; if each command runs in a fresh process, prefix every subsequent lark-cli command with `LARKSUITE_CLI_PROFILE=<name> lark-cli ...`. Then confirm with `lark-cli whoami --json` (`credentialSource` should read `env:LARKSUITE_CLI_PROFILE`).
+Profile selection: use `LARKSUITE_CLI_PROFILE` for a task/session profile, `--profile` for one command, and `unset LARKSUITE_CLI_PROFILE` to clear it. For identity diagnostics, run `lark-cli whoami --json`. Do not run `lark-cli profile use` unless the user asks to change the long-term default. If a task needs a specific identity, actually set it; ask for the profile name if unknown. Do not merely say which profile you will use.
 
 ## 更新检查
 
