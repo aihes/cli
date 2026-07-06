@@ -6,6 +6,7 @@ package credential_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -253,6 +254,96 @@ func TestSelection_State7_ProfileSecretInvalid(t *testing.T) {
 		t.Errorf("app_id = %q, want cli_a", ce.AppID)
 	}
 	assertNoSecretLeak(t, "state7", ce.Message, ce.Hint)
+}
+
+// secretMarkerValue is a distinctive string used to prove that the
+// profile_secret_invalid path drops the underlying error entirely, even when
+// that underlying error's own message CONTAINS a secret. Unlike
+// writeConfigTenantABroken (whose noop-keychain failure is a harmless empty
+// error), this uses a custom DefaultAccountResolver whose error text embeds
+// the marker, closing the gap where a leak could hide in a cause chain that
+// happens to be empty in the noop-keychain case.
+const secretMarkerValue = "SUPER_SECRET_MARKER_abc123"
+
+// leakingSecretResolver is a DefaultAccountResolver stub whose ResolveAccount
+// fails with an error whose message contains secretMarkerValue, simulating a
+// real keychain/secret-resolution failure that echoes back sensitive material
+// (e.g. a keychain library including the attempted secret in its error text).
+type leakingSecretResolver struct{}
+
+func (leakingSecretResolver) ResolveAccount(ctx context.Context) (*credential.Account, error) {
+	return nil, fmt.Errorf("keychain decode failed for secret %s", secretMarkerValue)
+}
+
+// State #7 (secret-bearing underlying error): P valid, but the underlying
+// account/secret resolution fails with an error that itself contains a
+// secret. This locks the §5.1 design: doResolveAccount emits a generic
+// profile_secret_invalid ConfigError WITHOUT attaching the underlying cause,
+// so a secret embedded in that underlying error can never surface through
+// err.Error(), Message, Hint, the unwrapped cause chain, or Selection().
+func TestSelection_State7_UnderlyingErrorContainingSecret_NotLeaked(t *testing.T) {
+	t.Setenv(envvars.CliAppID, "")
+	t.Setenv(envvars.CliAppSecret, "")
+	writeConfigTenantA(t) // profile "tenant_a" exists with app_id "cli_a"
+
+	ep := &envprovider.Provider{}
+	cp := credential.NewCredentialProvider([]extcred.Provider{ep}, leakingSecretResolver{}, nil, nil)
+	cp.WithProfile("tenant_a", true)
+
+	sel, err := cp.Selection(context.Background())
+	if got := subtypeOf(t, err); got != errs.SubtypeProfileSecretInvalid {
+		t.Fatalf("subtype = %q, want %q", got, errs.SubtypeProfileSecretInvalid)
+	}
+	ce := asConfigError(t, err)
+	if ce.Profile != "tenant_a" {
+		t.Errorf("profile = %q, want tenant_a", ce.Profile)
+	}
+	if ce.AppID != "cli_a" {
+		t.Errorf("app_id = %q, want cli_a", ce.AppID)
+	}
+
+	// Walk the full unwrap chain. This is the assertion that would catch a
+	// regression where the profile_secret_invalid branch starts attaching the
+	// underlying error via WithCause: if it did, this loop would find the
+	// marker in a wrapped link even though err.Error()/Message/Hint (which
+	// only reflect the top-level ConfigError, not the chain) might look clean.
+	for cur := error(ce); cur != nil; cur = errors.Unwrap(cur) {
+		if strings.Contains(cur.Error(), secretMarkerValue) {
+			t.Errorf("cause chain leaked secret marker: %v", cur)
+		}
+	}
+
+	if strings.Contains(err.Error(), secretMarkerValue) {
+		t.Errorf("err.Error() leaked secret marker: %q", err.Error())
+	}
+	if strings.Contains(ce.Message, secretMarkerValue) {
+		t.Errorf("Message leaked secret marker: %q", ce.Message)
+	}
+	if strings.Contains(ce.Hint, secretMarkerValue) {
+		t.Errorf("Hint leaked secret marker: %q", ce.Hint)
+	}
+	if strings.Contains(string(sel.Source), secretMarkerValue) {
+		t.Errorf("Selection.Source leaked secret marker: %q", sel.Source)
+	}
+	if strings.Contains(sel.Suggestion, secretMarkerValue) {
+		t.Errorf("Selection.Suggestion leaked secret marker: %q", sel.Suggestion)
+	}
+	if strings.Contains(sel.DirectCredentialEnv.AppID, secretMarkerValue) {
+		t.Errorf("Selection.DirectCredentialEnv.AppID leaked secret marker: %q", sel.DirectCredentialEnv.AppID)
+	}
+	for _, k := range sel.DirectCredentialEnv.Keys {
+		if strings.Contains(k, secretMarkerValue) {
+			t.Errorf("Selection.DirectCredentialEnv.Keys leaked secret marker: %q", k)
+		}
+	}
+	// State #7 always clears p.selection on the secret-invalid path (see
+	// doResolveAccount); assert it is zero-valued, which trivially implies no
+	// marker anywhere in it and guards against a future field being populated
+	// from the failed resolution.
+	if sel.Source != "" || sel.Suggestion != "" || sel.DirectCredentialEnv.Present ||
+		sel.DirectCredentialEnv.AppID != "" || len(sel.DirectCredentialEnv.Keys) != 0 {
+		t.Errorf("Selection() = %+v, want zero value on profile_secret_invalid", sel)
+	}
 }
 
 // State #8: P valid, E complete, app_id matches -> profile source, env present+matched.
