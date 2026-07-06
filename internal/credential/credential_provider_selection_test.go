@@ -180,7 +180,7 @@ func TestSelection_State4_EnvComplete(t *testing.T) {
 	if !sel.DirectCredentialEnv.Present {
 		t.Errorf("DirectCredentialEnv.Present = false, want true")
 	}
-	assertNoSecretLeak(t, "state4", string(sel.Source), sel.Suggestion, sel.DirectCredentialEnv.AppID)
+	assertNoSecretLeak(t, "state4", string(sel.Source), sel.DirectCredentialEnv.AppID)
 	assertNoSecretLeak(t, "state4-keys", sel.DirectCredentialEnv.Keys...)
 }
 
@@ -201,7 +201,7 @@ func TestSelection_State5_ProfileOnly(t *testing.T) {
 	if sel.DirectCredentialEnv.Present {
 		t.Errorf("DirectCredentialEnv.Present = true, want false")
 	}
-	assertNoSecretLeak(t, "state5", string(sel.Source), sel.Suggestion)
+	assertNoSecretLeak(t, "state5", string(sel.Source))
 }
 
 // State #5b: P valid from env (not flag) -> env:LARKSUITE_CLI_PROFILE source.
@@ -325,9 +325,6 @@ func TestSelection_State7_UnderlyingErrorContainingSecret_NotLeaked(t *testing.T
 	if strings.Contains(string(sel.Source), secretMarkerValue) {
 		t.Errorf("Selection.Source leaked secret marker: %q", sel.Source)
 	}
-	if strings.Contains(sel.Suggestion, secretMarkerValue) {
-		t.Errorf("Selection.Suggestion leaked secret marker: %q", sel.Suggestion)
-	}
 	if strings.Contains(sel.DirectCredentialEnv.AppID, secretMarkerValue) {
 		t.Errorf("Selection.DirectCredentialEnv.AppID leaked secret marker: %q", sel.DirectCredentialEnv.AppID)
 	}
@@ -340,7 +337,7 @@ func TestSelection_State7_UnderlyingErrorContainingSecret_NotLeaked(t *testing.T
 	// doResolveAccount); assert it is zero-valued, which trivially implies no
 	// marker anywhere in it and guards against a future field being populated
 	// from the failed resolution.
-	if sel.Source != "" || sel.Suggestion != "" || sel.DirectCredentialEnv.Present ||
+	if sel.Source != "" || sel.DirectCredentialEnv.Present ||
 		sel.DirectCredentialEnv.AppID != "" || len(sel.DirectCredentialEnv.Keys) != 0 {
 		t.Errorf("Selection() = %+v, want zero value on profile_secret_invalid", sel)
 	}
@@ -366,7 +363,7 @@ func TestSelection_State8_ProfileMatchesEnv(t *testing.T) {
 	if sel.DirectCredentialEnv.AppID != "cli_a" {
 		t.Errorf("DirectCredentialEnv.AppID = %q, want cli_a", sel.DirectCredentialEnv.AppID)
 	}
-	assertNoSecretLeak(t, "state8", string(sel.Source), sel.Suggestion, sel.DirectCredentialEnv.AppID)
+	assertNoSecretLeak(t, "state8", string(sel.Source), sel.DirectCredentialEnv.AppID)
 	assertNoSecretLeak(t, "state8-keys", sel.DirectCredentialEnv.Keys...)
 }
 
@@ -469,7 +466,7 @@ func TestSelection_NonEnvExtensionProviderWinsOverProfile(t *testing.T) {
 			t.Errorf("got profile_app_credential_conflict, want none for non-env provider")
 		}
 	}
-	assertNoSecretLeak(t, "nonenv-sidecar", string(sel.Source), sel.Suggestion, sel.DirectCredentialEnv.AppID)
+	assertNoSecretLeak(t, "nonenv-sidecar", string(sel.Source), sel.DirectCredentialEnv.AppID)
 }
 
 // State #1: P none, E none, C present -> config default (currentApp).

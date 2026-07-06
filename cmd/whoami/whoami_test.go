@@ -375,8 +375,8 @@ func profileSelectionFactory(t *testing.T) (*cmdutil.Factory, *bytes.Buffer) {
 
 // TestWhoamiIncludesCredentialSource locks in the diagnostic fields surfaced
 // from the cached credential.IdentitySelection (Task 6): credentialSource,
-// explicit, directCredentialEnv, and suggestion. whoami must read the cached
-// selection as-is, not re-infer it.
+// explicit, and directCredentialEnv. whoami must read the cached selection
+// as-is, not re-infer it.
 func TestWhoamiIncludesCredentialSource(t *testing.T) {
 	f, out := profileSelectionFactory(t)
 
@@ -403,9 +403,6 @@ func TestWhoamiIncludesCredentialSource(t *testing.T) {
 	}
 	if got.DirectCredentialEnv.Present {
 		t.Fatalf("directCredentialEnv.present = true, want false: %#v", got.DirectCredentialEnv)
-	}
-	if got.Suggestion == "" {
-		t.Fatalf("suggestion = empty, want non-empty")
 	}
 	if !strings.Contains(raw, `"credentialSource": "env:LARKSUITE_CLI_PROFILE"`) {
 		t.Fatalf("raw JSON missing credentialSource literal: %s", raw)

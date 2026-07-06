@@ -29,7 +29,6 @@ type DirectCredentialEnv struct {
 type IdentitySelection struct {
 	Source              CredentialSourceKind
 	DirectCredentialEnv DirectCredentialEnv
-	Suggestion          string
 }
 
 // Explicit reports whether the identity was actively specified by the

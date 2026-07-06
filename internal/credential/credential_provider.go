@@ -310,7 +310,6 @@ func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, er
 				WithAppID(app.AppId).
 				WithHint("verify the profile's app secret or re-add the profile with `lark-cli config`.")
 		}
-		p.selection.Suggestion = "如需临时覆盖本条命令，使用 --profile。"
 		p.selectedSource = defaultTokenSource{resolver: p.defaultToken}
 		return acct, nil
 	}

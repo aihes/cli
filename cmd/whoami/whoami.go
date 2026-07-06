@@ -35,15 +35,14 @@ type whoamiResult struct {
 	OnBehalfOf     *delegatedUser `json:"onBehalfOf,omitempty"`
 	Hint           string         `json:"hint,omitempty"`
 
-	// CredentialSource, Explicit, DirectCredentialEnv, and Suggestion surface
-	// the cached credential.IdentitySelection computed during resolution (not
-	// re-inferred here). CredentialSource can be empty ("") on the non-env
+	// CredentialSource, Explicit, and DirectCredentialEnv surface the cached
+	// credential.IdentitySelection computed during resolution (not re-inferred
+	// here). CredentialSource can be empty ("") on the non-env
 	// extension-provider path (e.g. sidecar mode), where no selection kind
 	// applies; this is a documented, valid state, not an error.
 	CredentialSource    string                         `json:"credentialSource"`
 	Explicit            bool                           `json:"explicit"`
 	DirectCredentialEnv credential.DirectCredentialEnv `json:"directCredentialEnv"`
-	Suggestion          string                         `json:"suggestion,omitempty"`
 }
 
 // delegatedUser is the user a user-identity acts on behalf of.
@@ -160,7 +159,6 @@ func buildResult(cfg *core.CliConfig, as core.Identity, source string, diag iden
 		CredentialSource:    string(selection.Source),
 		Explicit:            selection.Explicit(),
 		DirectCredentialEnv: selection.DirectCredentialEnv,
-		Suggestion:          selection.Suggestion,
 	}
 	// Use the diagnosed hint as-is: it is tailored to the credential source, so
 	// it never says "auth login" when that is blocked under an external provider.
