@@ -135,7 +135,40 @@ func TestSelection_State2_NoActiveProfile(t *testing.T) {
 	if got := subtypeOf(t, err); got != errs.SubtypeNoActiveProfile {
 		t.Fatalf("subtype = %q, want %q", got, errs.SubtypeNoActiveProfile)
 	}
+	// Defect 1 (spec §5): no_active_profile must carry credential_source=config.
+	ce := asConfigError(t, err)
+	if ce.CredentialSource != "config" {
+		t.Errorf("credential_source = %q, want %q", ce.CredentialSource, "config")
+	}
 	assertNoSecretLeak(t, "state2", err.Error(), string(sel.Source))
+}
+
+// Config-default profile with a broken secret: P none, E none, C present but the
+// default profile's keychain secret ref is corrupted. Per spec §3 step 3.2 this
+// must be profile_secret_invalid (the identity IS configured, only its secret is
+// broken) — NOT no_active_profile (which is reserved for "no usable default").
+func TestSelection_ConfigDefaultBrokenSecret_ProfileSecretInvalid(t *testing.T) {
+	t.Setenv(envvars.CliAppID, "")
+	t.Setenv(envvars.CliAppSecret, "")
+	writeConfigTenantABroken(t) // CurrentApp = tenant_a (app_id cli_a), broken keychain ref
+	cp := newProvider(t, "", false)
+
+	_, err := cp.Selection(context.Background())
+	if got := subtypeOf(t, err); got != errs.SubtypeProfileSecretInvalid {
+		t.Fatalf("subtype = %q, want %q", got, errs.SubtypeProfileSecretInvalid)
+	}
+	ce := asConfigError(t, err)
+	if ce.Profile != "tenant_a" {
+		t.Errorf("profile = %q, want tenant_a", ce.Profile)
+	}
+	if ce.AppID != "cli_a" {
+		t.Errorf("app_id = %q, want cli_a", ce.AppID)
+	}
+	// §5.1: generic message, no cause, no secret anywhere.
+	if errors.Unwrap(ce) != nil {
+		t.Errorf("profile_secret_invalid must not attach a cause, got %v", errors.Unwrap(ce))
+	}
+	assertNoSecretLeak(t, "config-default-broken", ce.Message, ce.Hint, ce.AppID)
 }
 
 // State #3: P none, E partial (only APP_ID) -> app_credential_incomplete.
@@ -232,6 +265,12 @@ func TestSelection_State6_ProfileNotFound(t *testing.T) {
 		t.Fatalf("subtype = %q, want %q", got, errs.SubtypeProfileNotFound)
 	}
 	prob, _ := errs.ProblemOf(err)
+	// Defect 1 (spec §5): profile_not_found must carry the credential_source that
+	// named the profile — here the --profile flag.
+	ce := asConfigError(t, err)
+	if ce.CredentialSource != string(credential.SourceFlagProfile) {
+		t.Errorf("credential_source = %q, want %q", ce.CredentialSource, credential.SourceFlagProfile)
+	}
 	assertNoSecretLeak(t, "state6", err.Error(), prob.Hint, string(sel.Source))
 }
 

@@ -327,7 +327,13 @@ type ConfigError struct {
 	MissingKeys []string `json:"missing_keys,omitempty"`
 	Profile     string   `json:"profile,omitempty"`
 	AppID       string   `json:"app_id,omitempty"`
-	Cause       error    `json:"-"`
+	// CredentialSource is the machine-readable App/credential selection source
+	// that produced this config error (e.g. "flag:--profile",
+	// "env:LARKSUITE_CLI_PROFILE", "config"). It is required on
+	// profile_not_found and no_active_profile (spec §5) so an agent can branch
+	// on how the identity was (or was not) chosen. It is never a secret.
+	CredentialSource string `json:"credential_source,omitempty"`
+	Cause            error  `json:"-"`
 }
 
 // Unwrap is nil-receiver safe; see ValidationError.Unwrap.
@@ -393,6 +399,14 @@ func (e *ConfigError) WithProfile(name string) *ConfigError {
 
 func (e *ConfigError) WithAppID(appID string) *ConfigError {
 	e.AppID = appID
+	return e
+}
+
+// WithCredentialSource records the machine-readable credential-selection source
+// on the wire (snake_case credential_source). The value is an enum string
+// (e.g. "flag:--profile", "config"), never a secret.
+func (e *ConfigError) WithCredentialSource(source string) *ConfigError {
+	e.CredentialSource = source
 	return e
 }
 

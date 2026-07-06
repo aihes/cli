@@ -140,7 +140,8 @@ func TestConfigError_ProfileFieldsMarshalJSON(t *testing.T) {
 	ce := NewConfigError(SubtypeAppCredentialIncomplete, "incomplete").
 		WithMissingKeys("LARKSUITE_CLI_APP_ID", "LARKSUITE_CLI_APP_SECRET").
 		WithProfile("work").
-		WithAppID("cli_abc")
+		WithAppID("cli_abc").
+		WithCredentialSource("flag:--profile")
 	b, err := json.Marshal(ce)
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +153,7 @@ func TestConfigError_ProfileFieldsMarshalJSON(t *testing.T) {
 		`"missing_keys":["LARKSUITE_CLI_APP_ID","LARKSUITE_CLI_APP_SECRET"]`,
 		`"profile":"work"`,
 		`"app_id":"cli_abc"`,
+		`"credential_source":"flag:--profile"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
@@ -165,7 +167,7 @@ func TestConfigError_ProfileFieldsMarshalJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := string(b2)
-	for _, notWant := range []string{`"missing_keys"`, `"profile"`, `"app_id"`} {
+	for _, notWant := range []string{`"missing_keys"`, `"profile"`, `"app_id"`, `"credential_source"`} {
 		if strings.Contains(s2, notWant) {
 			t.Errorf("%q should be omitted when empty; got %s", notWant, s2)
 		}

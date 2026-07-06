@@ -272,6 +272,7 @@ func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, er
 			return nil, errs.NewConfigError(errs.SubtypeProfileNotFound,
 				"profile %q not found", p.profile).
 				WithProfile(p.profile).
+				WithCredentialSource(string(p.profileSource())).
 				WithHint("run `lark-cli profile list` to see available profiles.")
 		}
 		if envAcct != nil {
@@ -342,10 +343,26 @@ func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, er
 	if p.defaultAcct != nil {
 		acct, err := p.defaultAcct.ResolveAccount(ctx)
 		if err != nil {
-			// No usable default identity → no_active_profile. Other typed
+			// The config default failed to resolve. Distinguish (spec §3 step
+			// 3.2): a default profile that EXISTS (has an app_id) but whose
+			// secret cannot be resolved locally is a profile_secret_invalid —
+			// "identity is configured, its secret is broken" is more actionable
+			// than "no active profile". Only when there is genuinely no usable
+			// default profile do we report no_active_profile. Other typed
 			// failures (e.g. a specific config error) pass through unchanged.
 			if prob, ok := errs.ProblemOf(err); ok && prob.Subtype == errs.SubtypeNotConfigured {
+				if name, appID, ok := defaultProfileIdentity(); ok {
+					// SECURITY (§5.1): generic message — never embed the
+					// underlying error or any secret material. app_id is
+					// plaintext and safe to echo.
+					return nil, errs.NewConfigError(errs.SubtypeProfileSecretInvalid,
+						"profile %q credential could not be resolved locally", name).
+						WithProfile(name).
+						WithAppID(appID).
+						WithHint("verify the profile's app secret or re-add the profile with `lark-cli config`.")
+				}
 				return nil, errs.NewConfigError(errs.SubtypeNoActiveProfile, "no active profile").
+					WithCredentialSource(noActiveProfileCredentialSource).
 					WithHint("run `lark-cli config init` / `lark-cli profile add`, or set %s.", envvars.CliProfile)
 			}
 			return nil, err
@@ -365,6 +382,31 @@ func (p *CredentialProvider) profileSource() CredentialSourceKind {
 		return SourceFlagProfile
 	}
 	return SourceEnvProfile
+}
+
+// noActiveProfileCredentialSource is the credential_source reported on the
+// no_active_profile error. Spec §5 fixes this to the literal "config": there is
+// no resolved default profile at all, so the more specific config:currentApp /
+// config:firstApp source values (used on successful config-default selections)
+// would be misleading. It is an enum string, never a secret.
+const noActiveProfileCredentialSource = "config"
+
+// defaultProfileIdentity reports the config default profile's display name and
+// app_id when a usable default profile actually EXISTS (currentApp > firstApp
+// resolves to an app with a non-empty app_id). It never touches the keychain or
+// any secret, so it can distinguish "default profile exists but its secret is
+// broken" (→ profile_secret_invalid) from "no usable default profile at all"
+// (→ no_active_profile), without risking a secret leak (§5.1).
+func defaultProfileIdentity() (name, appID string, ok bool) {
+	multi, err := core.LoadMultiAppConfig()
+	if err != nil || multi == nil {
+		return "", "", false
+	}
+	app := multi.CurrentAppConfig("")
+	if app == nil || app.AppId == "" {
+		return "", "", false
+	}
+	return app.ProfileName(), app.AppId, true
 }
 
 // selectionSourceForDefault reports whether the config default resolved to the
