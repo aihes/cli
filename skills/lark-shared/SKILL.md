@@ -126,6 +126,10 @@ lark-cli auth login --device-code <device_code>
 - **不要在同一轮中展示 URL 后立刻执行 `--device-code`**，这会导致用户看不到 URL
 - **禁止缓存 `verification_url` 或 `device_code`**：每次需要授权时，必须重新执行 `lark-cli auth login --no-wait --json` 生成新的链接。不要将授权链接和 device code 存入上下文供后续复用
 
+## Profile 选择
+
+Profile selection: lark-cli supports temporary profile selection and identity diagnostics. For profile, tenant, or app-identity requests, check `lark-cli profile --help`; when identity looks wrong, run `lark-cli whoami --json`. Use `LARKSUITE_CLI_PROFILE` for a task/session profile, `--profile` for one command, and `unset LARKSUITE_CLI_PROFILE` when the task no longer wants the session profile. Do not run `lark-cli profile use` unless the user explicitly asks to change the long-term default.
+
 ## 更新检查
 
 lark-cli 命令执行后，如果检测到新版本，JSON 输出中会包含 `_notice.update` 字段（含 `message`、`command` 等）。
