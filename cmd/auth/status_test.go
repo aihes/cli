@@ -6,12 +6,26 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/httpmock"
 )
+
+func TestAuthStatusHelpDistinguishesFromWhoami(t *testing.T) {
+	cmd := NewCmdAuthStatus(nil, nil)
+	for _, want := range []string{
+		"OAuth user login",
+		"not profile/app selection diagnostics",
+		"lark-cli whoami",
+	} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("auth status --help Long missing %q; got:\n%s", want, cmd.Long)
+		}
+	}
+}
 
 func TestAuthStatusRun_SplitsBotAndUserIdentity(t *testing.T) {
 	f, stdout, _, _ := cmdutil.TestFactory(t, &core.CliConfig{
