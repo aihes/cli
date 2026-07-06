@@ -12,8 +12,8 @@ import (
 	"os"
 	"sync"
 
-	extcred "github.com/larksuite/cli/extension/credential"
 	"github.com/larksuite/cli/errs"
+	extcred "github.com/larksuite/cli/extension/credential"
 	"github.com/larksuite/cli/internal/auth"
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/envvars"
@@ -231,6 +231,30 @@ func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, er
 			return nil, err
 		}
 		if acct != nil {
+			// Only the env (direct-credential) provider feeds profile
+			// arbitration / conflict detection / DirectCredentialEnv reporting.
+			// This mirrors the block-path guard above. A non-env extension
+			// provider (e.g. sidecar) is NOT a direct-credential env account:
+			// it wins outright here, returning its account + token source
+			// unchanged (pre-diff behavior), without being misreported as a
+			// direct env credential (§4.2: Present = direct env vars actually
+			// set) or triggering a spurious profile_app_credential_conflict.
+			if prov.Name() != directCredentialProviderName {
+				internal := convertAccount(acct)
+				source := extensionTokenSource{provider: prov}
+				if err := p.enrichUserInfo(ctx, internal, source); err != nil {
+					if p.warnOut != nil {
+						_, _ = fmt.Fprintf(p.warnOut, "warning: unable to verify user identity from credential source %q: %v\n", source.Name(), err)
+					}
+					// enrichUserInfo failure is non-fatal: SupportedIdentities
+					// (used for strict mode) is already set by the provider.
+					// Clear unverified user identity for safety.
+					internal.UserOpenId = ""
+					internal.UserName = ""
+				}
+				p.selectedSource = source
+				return internal, nil
+			}
 			envAcct = convertAccount(acct)
 			envSource = extensionTokenSource{provider: prov}
 			break

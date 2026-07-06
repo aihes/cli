@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/larksuite/cli/errs"
 	extcred "github.com/larksuite/cli/extension/credential"
 	envprovider "github.com/larksuite/cli/extension/credential/env"
-	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/credential"
 	"github.com/larksuite/cli/internal/envvars"
@@ -317,6 +317,68 @@ func TestSelection_State10_ProfileWithEnvPartial(t *testing.T) {
 	}
 	assertNoSecretLeak(t, "state10", ce.Message, ce.Hint)
 	assertNoSecretLeak(t, "state10-keys", ce.MissingKeys...)
+}
+
+// fakeSidecarProvider is a NON-env extension provider (Priority 0, Name !=
+// directCredentialProviderName) that always returns a non-nil account. It
+// stands in for the sidecar extension provider without needing a build tag.
+type fakeSidecarProvider struct {
+	appID string
+}
+
+func (f *fakeSidecarProvider) Name() string  { return "sidecar" }
+func (f *fakeSidecarProvider) Priority() int { return 0 }
+func (f *fakeSidecarProvider) ResolveAccount(ctx context.Context) (*extcred.Account, error) {
+	return &extcred.Account{AppID: f.appID, Brand: extcred.Brand("feishu")}, nil
+}
+func (f *fakeSidecarProvider) ResolveToken(ctx context.Context, req extcred.TokenSpec) (*extcred.Token, error) {
+	return &extcred.Token{Value: "sidecar-tok", Source: "sidecar"}, nil
+}
+
+// Regression: a NON-env extension provider (sidecar) that returns an account
+// must win outright even when a profile is set. It must NOT be treated as a
+// direct-credential env account: no profile arbitration, no
+// profile_app_credential_conflict (even though its app_id differs from the
+// profile's cli_a), and DirectCredentialEnv.Present must stay false (§4.2 —
+// no direct env vars are set). This proves the success-account provider gating
+// mirrors the block-path guard.
+func TestSelection_NonEnvExtensionProviderWinsOverProfile(t *testing.T) {
+	t.Setenv(envvars.CliAppID, "")     // no direct env credential
+	t.Setenv(envvars.CliAppSecret, "") // no direct env credential
+	writeConfigTenantA(t)              // profile tenant_a exists, app_id cli_a
+
+	sidecar := &fakeSidecarProvider{appID: "sidecar_app"} // differs from cli_a
+	defaultAcct := credential.NewDefaultAccountProvider(func() keychain.KeychainAccess { return &noopKC{} }, "tenant_a")
+	cp := credential.NewCredentialProvider([]extcred.Provider{sidecar}, defaultAcct, nil, nil)
+	cp.WithProfile("tenant_a", true)
+
+	acct, err := cp.ResolveAccount(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The sidecar account is used as-is, NOT overridden by profile arbitration.
+	if acct == nil || acct.AppID != "sidecar_app" {
+		t.Fatalf("account = %+v, want AppID sidecar_app (sidecar wins outright)", acct)
+	}
+
+	sel, err := cp.Selection(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected Selection error: %v", err)
+	}
+	// No misreported direct env credential (§4.2).
+	if sel.DirectCredentialEnv.Present {
+		t.Errorf("DirectCredentialEnv.Present = true, want false (no direct env vars set)")
+	}
+	// The mismatched app_id (sidecar_app vs profile cli_a) must NOT trigger a
+	// profile_app_credential_conflict: both ResolveAccount and Selection above
+	// returned nil errors, so no conflict (or any other) error was produced.
+	// Guard against a future regression that surfaces a conflict via Selection.
+	if _, selErr := cp.Selection(context.Background()); selErr != nil {
+		if subtypeOf(t, selErr) == errs.SubtypeProfileAppCredentialConflict {
+			t.Errorf("got profile_app_credential_conflict, want none for non-env provider")
+		}
+	}
+	assertNoSecretLeak(t, "nonenv-sidecar", string(sel.Source), sel.Suggestion, sel.DirectCredentialEnv.AppID)
 }
 
 // State #1: P none, E none, C present -> config default (currentApp).
