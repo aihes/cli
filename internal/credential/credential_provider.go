@@ -9,12 +9,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 
 	extcred "github.com/larksuite/cli/extension/credential"
+	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/auth"
 	"github.com/larksuite/cli/internal/core"
+	"github.com/larksuite/cli/internal/envvars"
 )
+
+// directCredentialProviderName is the Name() of the env provider, the source
+// of direct app credentials (LARKSUITE_CLI_APP_ID / _APP_SECRET). Only its
+// incomplete blocks map to app_credential_incomplete (spec §3 step 1).
+const directCredentialProviderName = "env"
 
 // DefaultAccountResolver is implemented by the default account provider.
 type DefaultAccountResolver interface {
@@ -136,10 +144,18 @@ type CredentialProvider struct {
 	httpClient   func() (*http.Client, error)
 	warnOut      io.Writer
 
+	// profile is the active profile (from --profile or LARKSUITE_CLI_PROFILE).
+	// profileFromFlag discriminates the source for the reported selection.
+	profile         string
+	profileFromFlag bool
+
 	accountOnce    sync.Once
 	account        *Account
 	accountErr     error
 	selectedSource credentialSource
+	// selection is the explainable credential-selection result, populated by
+	// doResolveAccount under accountOnce. It never carries a secret (§5.1).
+	selection IdentitySelection
 
 	hintOnce sync.Once
 	hint     *IdentityHint
@@ -161,6 +177,15 @@ func (p *CredentialProvider) SetWarnOut(warnOut io.Writer) *CredentialProvider {
 	return p
 }
 
+// WithProfile records the active profile and whether it came from the
+// --profile flag (as opposed to the LARKSUITE_CLI_PROFILE env fallback).
+// It governs credential arbitration and the reported selection source.
+func (p *CredentialProvider) WithProfile(profile string, fromFlag bool) *CredentialProvider {
+	p.profile = profile
+	p.profileFromFlag = fromFlag
+	return p
+}
+
 // ResolveAccount resolves app credentials. Result is cached after first call.
 // NOTE: Uses sync.Once — only the context from the first call is used for resolution.
 // Subsequent calls return the cached result regardless of their context.
@@ -172,38 +197,197 @@ func (p *CredentialProvider) ResolveAccount(ctx context.Context) (*Account, erro
 	return p.account, p.accountErr
 }
 
+// doResolveAccount arbitrates the credential/App selection per the spec
+// resolution order (§3): env-partial → profile → env-complete → config default.
+// It populates p.selection (no secret; §5.1) and p.selectedSource on every
+// success path.
 func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, error) {
+	// Step 1 (spec §3): consult the extension providers. The env provider is
+	// the "direct app credential" source. An incomplete direct credential
+	// (only APP_ID or only APP_SECRET set) short-circuits to
+	// app_credential_incomplete regardless of the active profile.
+	var envAcct *Account
+	var envSource extensionTokenSource
 	for _, prov := range p.providers {
 		acct, err := prov.ResolveAccount(ctx)
 		if err != nil {
+			var blockErr *extcred.BlockError
+			// Only the env (direct-credential) provider maps an incomplete
+			// block to app_credential_incomplete. Other providers' blocks
+			// propagate unchanged so they still stop the chain (§3 step 1
+			// is specifically about direct app credential env vars).
+			if errors.As(err, &blockErr) && prov.Name() == directCredentialProviderName {
+				if missing := missingDirectCredentialKeys(); len(missing) > 0 {
+					return nil, errs.NewConfigError(errs.SubtypeAppCredentialIncomplete,
+						"direct app credential is incomplete").
+						WithMissingKeys(missing...).
+						WithHint("set both %s and %s, or unset both and use --profile / a config default.",
+							envvars.CliAppID, envvars.CliAppSecret)
+				}
+				// Block for a reason other than incompleteness (e.g. an
+				// invalid identity/strict-mode value); preserve prior behavior.
+				return nil, err
+			}
 			return nil, err
 		}
 		if acct != nil {
-			internal := convertAccount(acct)
-			source := extensionTokenSource{provider: prov}
-			if err := p.enrichUserInfo(ctx, internal, source); err != nil {
-				if p.warnOut != nil {
-					_, _ = fmt.Fprintf(p.warnOut, "warning: unable to verify user identity from credential source %q: %v\n", source.Name(), err)
-				}
-				// enrichUserInfo failure is non-fatal: SupportedIdentities
-				// (used for strict mode) is already set by the provider.
-				// Clear unverified user identity for safety.
-				internal.UserOpenId = ""
-				internal.UserName = ""
-			}
-			p.selectedSource = source
-			return internal, nil
+			envAcct = convertAccount(acct)
+			envSource = extensionTokenSource{provider: prov}
+			break
 		}
 	}
-	if p.defaultAcct != nil {
+
+	// Step 2 (spec §3): an explicit profile was requested.
+	if p.profile != "" {
+		multi, loadErr := core.LoadMultiAppConfig()
+		var app *core.AppConfig
+		if loadErr == nil && multi != nil {
+			app = multi.FindApp(p.profile)
+		}
+		if app == nil {
+			return nil, errs.NewConfigError(errs.SubtypeProfileNotFound,
+				"profile %q not found", p.profile).
+				WithProfile(p.profile).
+				WithHint("run `lark-cli profile list` to see available profiles.")
+		}
+		if envAcct != nil {
+			// E == complete: the direct env app_id must match the profile.
+			if app.AppId != envAcct.AppID {
+				return nil, errs.NewValidationError(errs.SubtypeProfileAppCredentialConflict,
+					"profile %q app_id does not match %s", p.profile, envvars.CliAppID).
+					WithProfileAppConflict(app.AppId, envAcct.AppID).
+					WithHint("unset %s/%s, or select a profile whose app_id matches the environment.",
+						envvars.CliAppID, envvars.CliAppSecret)
+			}
+			p.selection = IdentitySelection{
+				Source: p.profileSource(),
+				DirectCredentialEnv: DirectCredentialEnv{
+					Present: true,
+					Keys:    presentDirectCredentialKeys(),
+					AppID:   envAcct.AppID,
+					Matched: true,
+				},
+			}
+		} else {
+			p.selection = IdentitySelection{
+				Source:              p.profileSource(),
+				DirectCredentialEnv: DirectCredentialEnv{Present: false},
+			}
+		}
+		// Resolve the profile's own (keychain-backed) credential locally.
 		acct, err := p.defaultAcct.ResolveAccount(ctx)
 		if err != nil {
-			return nil, err
+			// SECURITY (§5.1): generic message — never embed the underlying
+			// error or any secret material.
+			p.selection = IdentitySelection{}
+			return nil, errs.NewConfigError(errs.SubtypeProfileSecretInvalid,
+				"profile %q credential could not be resolved locally", p.profile).
+				WithProfile(p.profile).
+				WithAppID(app.AppId).
+				WithHint("verify the profile's app secret or re-add the profile with `lark-cli config`.")
 		}
+		p.selection.Suggestion = "如需临时覆盖本条命令，使用 --profile。"
 		p.selectedSource = defaultTokenSource{resolver: p.defaultToken}
 		return acct, nil
 	}
+
+	// Step 3 (spec §3): no explicit profile — direct env credential wins.
+	if envAcct != nil {
+		if err := p.enrichUserInfo(ctx, envAcct, envSource); err != nil {
+			if p.warnOut != nil {
+				_, _ = fmt.Fprintf(p.warnOut, "warning: unable to verify user identity from credential source %q: %v\n", envSource.Name(), err)
+			}
+			// enrichUserInfo failure is non-fatal: SupportedIdentities
+			// (used for strict mode) is already set by the provider.
+			// Clear unverified user identity for safety.
+			envAcct.UserOpenId = ""
+			envAcct.UserName = ""
+		}
+		p.selectedSource = envSource
+		p.selection = IdentitySelection{
+			Source: SourceEnvAppID,
+			DirectCredentialEnv: DirectCredentialEnv{
+				Present: true,
+				Keys:    presentDirectCredentialKeys(),
+				AppID:   envAcct.AppID,
+			},
+		}
+		return envAcct, nil
+	}
+
+	// No direct env credential and no profile → the config default.
+	if p.defaultAcct != nil {
+		acct, err := p.defaultAcct.ResolveAccount(ctx)
+		if err != nil {
+			// No usable default identity → no_active_profile. Other typed
+			// failures (e.g. a specific config error) pass through unchanged.
+			if prob, ok := errs.ProblemOf(err); ok && prob.Subtype == errs.SubtypeNotConfigured {
+				return nil, errs.NewConfigError(errs.SubtypeNoActiveProfile, "no active profile").
+					WithHint("run `lark-cli config init` / `lark-cli profile add`, or set %s.", envvars.CliProfile)
+			}
+			return nil, err
+		}
+		multi, _ := core.LoadMultiAppConfig()
+		p.selectedSource = defaultTokenSource{resolver: p.defaultToken}
+		p.selection = IdentitySelection{Source: selectionSourceForDefault(multi)}
+		return acct, nil
+	}
 	return nil, core.NotConfiguredError()
+}
+
+// profileSource reports the credential source kind for a profile-backed
+// selection, discriminating the --profile flag from the env fallback.
+func (p *CredentialProvider) profileSource() CredentialSourceKind {
+	if p.profileFromFlag {
+		return SourceFlagProfile
+	}
+	return SourceEnvProfile
+}
+
+// selectionSourceForDefault reports whether the config default resolved to the
+// explicit currentApp or fell back to the first app (spec §3 step 3.2).
+func selectionSourceForDefault(multi *core.MultiAppConfig) CredentialSourceKind {
+	if multi != nil && multi.CurrentApp != "" {
+		return SourceConfigCurrentApp
+	}
+	return SourceConfigFirstApp
+}
+
+// missingDirectCredentialKeys returns the NAMES (never values) of the direct
+// app credential env vars that are absent. Used only when the env provider
+// blocks, to map an incomplete direct credential to app_credential_incomplete.
+func missingDirectCredentialKeys() []string {
+	var missing []string
+	if os.Getenv(envvars.CliAppID) == "" {
+		missing = append(missing, envvars.CliAppID)
+	}
+	if os.Getenv(envvars.CliAppSecret) == "" {
+		missing = append(missing, envvars.CliAppSecret)
+	}
+	return missing
+}
+
+// presentDirectCredentialKeys returns the NAMES (never values) of the direct
+// app credential env vars that are set. Used to annotate DirectCredentialEnv.
+func presentDirectCredentialKeys() []string {
+	var keys []string
+	if os.Getenv(envvars.CliAppID) != "" {
+		keys = append(keys, envvars.CliAppID)
+	}
+	if os.Getenv(envvars.CliAppSecret) != "" {
+		keys = append(keys, envvars.CliAppSecret)
+	}
+	return keys
+}
+
+// Selection resolves the account (once) and returns the cached, secret-free
+// explanation of how the credential/App was selected. It mirrors
+// selectedCredentialSource: resolve-then-return.
+func (p *CredentialProvider) Selection(ctx context.Context) (IdentitySelection, error) {
+	if _, err := p.ResolveAccount(ctx); err != nil {
+		return IdentitySelection{}, err
+	}
+	return p.selection, nil
 }
 
 // enrichUserInfo resolves user identity when extension provides a UAT.

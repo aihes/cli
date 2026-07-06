@@ -61,10 +61,11 @@ func NewDefault(streams *IOStreams, inv InvocationContext) *Factory {
 	// Phase 2: Credential (sole data source)
 	// Keychain is read via closure so callers can replace f.Keychain after construction.
 	f.Credential = buildCredentialProvider(credentialDeps{
-		Keychain:   func() keychain.KeychainAccess { return f.Keychain },
-		Profile:    inv.Profile,
-		HttpClient: f.HttpClient,
-		ErrOut:     f.IOStreams.ErrOut,
+		Keychain:        func() keychain.KeychainAccess { return f.Keychain },
+		Profile:         inv.Profile,
+		ProfileFromFlag: inv.ProfileFromFlag,
+		HttpClient:      f.HttpClient,
+		ErrOut:          f.IOStreams.ErrOut,
 	})
 
 	// Phase 3: Config derived from Credential via an explicit conversion boundary.
@@ -162,10 +163,11 @@ func buildSDKTransport() http.RoundTripper {
 }
 
 type credentialDeps struct {
-	Keychain   func() keychain.KeychainAccess
-	Profile    string
-	HttpClient func() (*http.Client, error)
-	ErrOut     io.Writer
+	Keychain        func() keychain.KeychainAccess
+	Profile         string
+	ProfileFromFlag bool
+	HttpClient      func() (*http.Client, error)
+	ErrOut          io.Writer
 }
 
 func buildCredentialProvider(deps credentialDeps) *credential.CredentialProvider {
@@ -178,5 +180,6 @@ func buildCredentialProvider(deps credentialDeps) *credential.CredentialProvider
 	// depend on. enrichUserInfo failures are already non-fatal (the
 	// provider clears unverified identity fields), so silencing the
 	// warning is safe.
-	return credential.NewCredentialProvider(providers, defaultAcct, defaultToken, deps.HttpClient)
+	return credential.NewCredentialProvider(providers, defaultAcct, defaultToken, deps.HttpClient).
+		WithProfile(deps.Profile, deps.ProfileFromFlag)
 }
