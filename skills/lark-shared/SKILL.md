@@ -32,7 +32,7 @@ lark-cli config init --new
 | 获取全部权限 | `lark-cli auth login --domain all --no-wait --json` |
 | 按业务域授权 | `lark-cli auth login --domain docs --domain drive --no-wait --json`；`--domain` 可重复，也可用逗号分隔 |
 | 指定单个 scope 授权 | `lark-cli auth login --scope "<scope>" --no-wait --json` |
-| 检查当前登录态、是谁登录、token 是否有效 | `lark-cli auth status --json --verify`；回答时引用 `identity`、`verified`、`identities.user.status`、`identities.user.userName`、`identities.user.openId`（用户 open id）、`identities.user.tokenStatus`、`identities.user.scope` |
+| 检查当前登录态、是谁登录、token 是否有效 | 必须运行 `lark-cli auth status --json --verify`；回答时引用 `identity`、`verified`、`identities.user.status`、`identities.user.userName`、`identities.user.openId`（用户 open id）、`identities.user.tokenStatus`、`identities.user.scope` |
 | 快速查看当前身份状态 | `lark-cli whoami`；实际生效的那一个身份 |
 | 退出当前机器的用户登录态 | `lark-cli auth logout --json`；`loggedOut:true` 表示注销成功 |
 | bot 缺少权限 | 不要执行 `auth login`；引导用户在开发者后台开通 bot scope，优先复用错误里的 `console_url` |
