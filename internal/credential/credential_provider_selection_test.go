@@ -40,10 +40,10 @@ func asValidationError(t *testing.T, err error) *errs.ValidationError {
 
 // secretValue is the profile secret written to config. It must NEVER appear in
 // any error message or IdentitySelection (security §5.1).
-const secretValue = "s3cr3t-tenant-a-value"
+const secretValue = "your-secret"
 
 // envSecretValue is the direct env app secret. Same no-leak guarantee.
-const envSecretValue = "env-secret-should-not-leak"
+const envSecretValue = "your-password"
 
 // writeConfigTenantA writes a config with a single profile "tenant_a" (app_id
 // "cli_a"). The secret is a plaintext secret stored in config, which resolves
@@ -302,7 +302,7 @@ func TestSelection_State7_ProfileSecretInvalid(t *testing.T) {
 // error), this uses a custom DefaultAccountResolver whose error text embeds
 // the marker, closing the gap where a leak could hide in a cause chain that
 // happens to be empty in the noop-keychain case.
-const secretMarkerValue = "SUPER_SECRET_MARKER_abc123"
+const secretMarkerValue = "your-access-token"
 
 // leakingSecretResolver is a DefaultAccountResolver stub whose ResolveAccount
 // fails with an error whose message contains secretMarkerValue, simulating a

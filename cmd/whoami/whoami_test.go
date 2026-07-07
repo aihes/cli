@@ -333,7 +333,7 @@ func (noopWhoamiKeychain) Remove(service, account string) error        { return 
 // credentialSourceSecret is the profile secret written to config for
 // TestWhoamiIncludesCredentialSource. It must never leak into whoami's output
 // (security §5.1).
-const credentialSourceSecret = "s3cr3t-whoami-credential-source"
+const credentialSourceSecret = "test-secret"
 
 // profileSelectionFactory builds a Factory whose CredentialProvider resolves
 // an explicit profile ("tenant_a") supplied via the LARKSUITE_CLI_PROFILE env
