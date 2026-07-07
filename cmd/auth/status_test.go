@@ -18,6 +18,7 @@ func TestAuthStatusHelpDistinguishesFromWhoami(t *testing.T) {
 	cmd := NewCmdAuthStatus(nil, nil)
 	for _, want := range []string{
 		"OAuth user login",
+		"auth status --json --verify",
 		"not profile/app selection diagnostics",
 		"lark-cli whoami",
 	} {
