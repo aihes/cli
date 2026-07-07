@@ -21,25 +21,38 @@ lark-cli docs +update --doc "文档URL或token" --command append --content '<p>�
 
 ## 前置条件 — 执行操作前必读
 
-**CRITICAL — 执行对应操作前，MUST 先用 Read 工具读取以下文件，缺一不可：**
-1. [`../lark-shared/SKILL.md`](../lark-shared/SKILL.md) — 认证、权限处理、全局参数（所有操作通用）
-2. **读取文档（`docs +fetch`）** → 必读 [`lark-doc-fetch.md`](references/lark-doc-fetch.md)（`--scope` / `--detail` 选择、局部读取策略、`<fragment>` / `<excerpt>` 输出结构）
-3. **创建或编辑文档内容** → 必读 [`lark-doc-xml.md`](references/lark-doc-xml.md)（XML 语法规则，仅当用户明确要求 Markdown 时改读 [`lark-doc-md.md`](references/lark-doc-md.md)）和必读 [`lark-doc-style.md`](references/style/lark-doc-style.md)（写作原则：默认段落、按体裁、组件克制）；从零创建时加读 [`lark-doc-create-workflow.md`](references/style/lark-doc-create-workflow.md)；编辑已有文档时加读 [`lark-doc-update.md`](references/lark-doc-update.md) 和 [`lark-doc-update-workflow.md`](references/style/lark-doc-update-workflow.md)
+**CRITICAL — 按任务命中以下阅读规则；执行对应操作前，MUST 先用 Read 工具读取命中的文件，缺一不可：**
 
-**未读完以上文件就执行相应操作会导致参数选择错误或格式错误。**
+1. **所有文档操作** → 必读 [`../lark-shared/SKILL.md`](../lark-shared/SKILL.md)  
+   用于认证、权限处理、身份选择和全局参数。
+2. **读取文档（`docs +fetch`）** → 必读 [`lark-doc-fetch.md`](references/lark-doc-fetch.md)  
+   用于选择 `--scope` / `--detail`、局部读取策略，以及理解 `<fragment>` / `<excerpt>` 输出结构。
+3. **创建文档**（从零创建 / 导入）→ 按顺序读取：
+   1. [`lark-doc-design-philosophy.md`](references/lark-doc-design-philosophy.md)。
+   2. [`lark-doc-create.md`](references/lark-doc-create.md)。
+   3. 格式文件二选一：默认读 [`lark-doc-xml.md`](references/lark-doc-xml.md)；用户明确 Markdown、提供 `.md` 文件或要求导入 Markdown 时，改读 [`lark-doc-md.md`](references/lark-doc-md.md)。
+4. **编辑已有文档** → 按顺序读取：
+   1. 先判断是否需要 Philosophy：简单替换、错别字、日期 / 人名 / 数字替换不读；重写、润色、排版、补正文 / 图表、调结构、保真改写时，加读 [`lark-doc-design-philosophy.md`](references/lark-doc-design-philosophy.md)，并按需只读一个体裁 router。
+   2. [`lark-doc-update.md`](references/lark-doc-update.md)。
+   3. 需要读取现状或写后验证时，按第 2 条读取 [`lark-doc-fetch.md`](references/lark-doc-fetch.md)。
+   4. 格式文件二选一：默认读 [`lark-doc-xml.md`](references/lark-doc-xml.md)；用户明确 Markdown、提供 `.md` 文件或要求写入 Markdown 时，改读 [`lark-doc-md.md`](references/lark-doc-md.md)。
+
+**Philosophy 负责创建与复杂编辑的设计判断；Router 负责一级大类模板与必要二类分流；Genre 只在 workplace/report 命中时补充细分偏好；Create / Update 负责执行；XML / Markdown 负责合法表达。**
+
+**未读完命中的必读文件就执行相应操作，容易导致参数选择错误、格式错误、结构失焦或内容破坏。**
 
 > **格式选择规则（全局）：**
-> - **创建 / 导入场景**（`docs +create`，或 `docs +update --command append/overwrite` 的整段写入）：XML 和 Markdown 都可以。用户提供 `.md` 本地文件、或明确说"导入 Markdown"时，直接用 Markdown；否则默认 XML。
+> - **创建 / 导入场景**（`docs +create`，或 `docs +update --command append/overwrite` 的整段写入）：XML 和 Markdown 都可以。用户提供 `.md` 本地文件、或明确说"导入 Markdown"时，直接用 Markdown；否则默认 XML（可用 callout、grid、checkbox 等富 block）。
 > - **精准编辑场景**（`docs +update` 的 `str_replace` / `block_insert_after` / `block_replace` / `block_delete` / `block_move_after` 等局部精修指令）：优先使用 XML（`--doc-format xml`，即默认值）。XML 能稳定表达 block 结构和样式，局部精修更可控；不要因为 Markdown 更简单就自行切换。
 
 ## 快速决策
 - 用户要**复制文档 / 创建文档副本 / 另存为副本**时，切到 [`lark-drive`](../lark-drive/SKILL.md)，按其中的复制指引使用 `lark-cli drive files copy`；不要用 `docs +fetch` + `docs +create` 重建正文，也不要走 `drive +export` / `drive +import`。
-- 先判定任务路径：找文档 / 导入导出走 [`lark-drive`](../lark-drive/SKILL.md)；只读 / 摘要用 `docs +fetch` 默认 `simple`；明确旧文本 → 新文本直接 `str_replace`；只有 block 链接、评论锚点、插入 / 替换 / 删除 / 移动才局部 fetch `with-ids`；保真改写已有内容才读 `full`
+- 先判定任务路径：找文档 / 导入导出走 [`lark-drive`](../lark-drive/SKILL.md)；只读 / 摘要用 `docs +fetch` 默认 `simple`；已有文档改写按 [`lark-doc-update.md`](references/lark-doc-update.md) 的 Observe-Diagnose-Patch Loop 先 fetch 再局部 patch；明确旧文本 → 新文本的简单替换可直接 `str_replace`，但写后必须 fetch 验证；只有 block 链接、评论锚点、插入 / 替换 / 删除 / 移动才局部 fetch `with-ids`；保真改写已有内容才读 `full`
 - block 直达链接格式：`文档基础 URL#block_id`；没有 block_id 时局部 fetch `with-ids`
-- 连续执行多个文档写操作时，必须按 [`lark-doc-update.md`](references/lark-doc-update.md) 的「Block ID 生命周期」判断旧 block ID 是否还能复用；`overwrite` / `block_replace` / `block_delete` 后不要复用受影响的旧 ID，插入 / 复制后要重新 fetch 才能拿到新 block ID
+- 连续执行多个文档写操作时，必须按 [`lark-doc-update.md`](references/lark-doc-update.md) 的「Block ID 生命周期」处理：每次更新后都按 block ID 已变更处理；需要继续或重复修改时，先重新 fetch 最新内容和 block ID，不要复用旧 fetch 结果
 - 用户需要在文档内**创建、复制或移动**资源块（画板、电子表格、多维表格等）时，必须先读取 [`lark-doc-xml.md`](references/lark-doc-xml.md) 的「三、资源块」章节
 - 写文档时，由内容和用户意图决定表达形式；流程、架构、路线图、关键指标等信息可以使用画板，但不要默认把重要信息都画板化
-- 新增或更新画板时，按 [`lark-doc-whiteboard.md`](references/lark-doc-whiteboard.md) 选型；Mermaid 可由主 Agent 直接插入，SVG / 复杂图 / 已有画板更新按其中流程隔离到 SubAgent
+- 新增画板按复杂度处理：简单 Mermaid / SVG 图可由主 Agent 直接写入草稿；复杂图或需要专门视觉设计的 SVG 交给 SubAgent 产出完整 `<whiteboard type="svg">...</whiteboard>`；特别复杂或已有画板更新，主 Agent 先建 `<whiteboard type="blank"></whiteboard>`，再启动 SubAgent 读取 `lark-whiteboard` 写入
 - 用户说"看一下文档里的图片/附件/素材""预览素材" → 用 `lark-cli docs +media-preview`
 - 用户明确说"下载素材" → 用 `lark-cli docs +media-download`
 - 用户想把文档回滚到某个 `revision_id` 或某一时刻 → 先读 [`lark-doc-history.md`](references/lark-doc-history.md)，按其中流程操作

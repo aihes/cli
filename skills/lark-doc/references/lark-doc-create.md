@@ -1,15 +1,24 @@
 # docs +create（创建飞书云文档）
 
-> **前置条件（MUST READ）：** 生成文档内容前，必须先用 Read 工具读取以下文件，缺一不可：
-> 1. [`lark-doc-xml.md`](lark-doc-xml.md) — XML 语法规则（使用 Markdown 格式时改读 [`lark-doc-md.md`](lark-doc-md.md)）
-> 2. [`lark-doc-style.md`](style/lark-doc-style.md) — 写作原则（默认段落、按体裁、组件克制）
-> 3. [`lark-doc-create-workflow.md`](style/lark-doc-create-workflow.md) — 从零创作工作流（Code-Act Loop、单 Agent 串行撰写）
->
-> **未读完以上文件就生成内容会导致格式错误。**
-
 从 XML（默认）或 Markdown 内容创建一个新的飞书云文档。
 
-> **⚠️ 格式选择规则：** 创建 / 导入场景下 XML 和 Markdown 都可以——用户提供 `.md` 本地文件、或明确说"导入 Markdown"时，直接用 Markdown；没有明确指示时默认 XML（表达能力更强，可承载更丰富的结构化内容）。不要在用户没要求的情况下主动从 XML 切到 Markdown，也不要在用户已给出 Markdown 时强行改成 XML。
+> **⚠️ 格式选择规则：** 创建 / 导入场景下 XML 和 Markdown 都可以——用户提供 `.md` 本地文件、或明确说"导入 Markdown"时，直接用 Markdown；没有明确指示时默认 XML（表达能力更强，支持 callout、grid、checkbox 等富 block 类型）。不要在用户没要求的情况下主动从 XML 切到 Markdown，也不要在用户已给出 Markdown 时强行改成 XML。
+
+## Document Authoring Loop
+
+从零创作文档时，以本地草稿文件作为唯一正文源（默认 XML；用户明确要求 Markdown 或提供 `.md` 文件时使用 Markdown），主 Agent 串行完成写作、审阅和修订，草稿达标后再调用 `docs +create`。不要先创建线上骨架再让多个 Agent 并行拆章节写入；这容易造成风格漂移、重复铺陈、结构断流和事实口径不一致。
+
+1. **Plan（规划）**：明确受众、目的、范围、体裁、结构和验收标准；事实来源或产品口径不确定时先询问用户，能安全假设时说明假设并继续。
+2. **Draft（起草）**：在当前工作目录创建相对路径草稿文件，主 Agent 按文档顺序串行写作；
+3. **Observe（观察）**：读取当前草稿，检查结构、重复、断流、事实、语气和格式；
+4. **Revise（修订）**：局部修订本地文件，优先调整顺序、补桥接句、删重复、统一术语和修正 XML；不追求第一稿一次完美。
+5. **Enrich（增强）**：决定一篇文档是否真正好读、可信、可传播。必要时加入表格、列表、callout、grid、画板、引用或附件；增强必须降低理解成本，不为了“丰富”而装饰。
+   - 新增画板按复杂度处理：简单 Mermaid 或 SVG 图可由主 Agent 直接写入本地 XML 草稿；复杂 SVG 可启动 SubAgent 只产出完整 `<whiteboard type="svg">...</whiteboard>` 片段；特别复杂或已有画板更新，再创建空白画板并让 SubAgent 读取 `lark-whiteboard` 完成写入。
+   - 创建后才能插入的图片、附件或资源，先在草稿中标记位置和素材路径，Deliver 后用 `docs +media-insert` 等命令补齐并 fetch 验证。
+6. **Validate（验证）**：检查用户要求、字数、格式、事实、可读性和风格；任何一项不满足，就回到 Observe / Revise 继续 loop。
+7. **Deliver（交付）**：本地草稿通过验证后，用 `docs +create --content @lark-doc-draft.xml` 创建 XML 文档；Markdown 草稿用 `docs +create --doc-format markdown --content @lark-doc-draft.md`。如需创建后插入图片、附件或资源，完成后再次 fetch 确认。
+
+`@file` 只接受当前工作目录下的相对路径，不要传 `@/tmp/xxx.xml` 这类绝对路径。SubAgent 只用于边界清晰的视觉或资源片段（如完整 SVG whiteboard XML），主 Agent 必须审核并合并结果；不要让 SubAgent 并行撰写正文。
 
 ## 命令
 
@@ -65,15 +74,9 @@ lark-cli docs +create --doc-format markdown --title "项目计划" --content $'#
 | `--parent-token`    | 否  | 父文件夹或知识库节点 token（与 `--parent-position` 互斥）  |
 | `--parent-position` | 否  | 父节点位置，如 `my_library`（与 `--parent-token` 互斥） |
 
-## 最佳实践
-
-- **较长文档**：参考 [`lark-doc-create-workflow.md`](style/lark-doc-create-workflow.md) 先建骨架再分段写入；短文档可一次写完整内容
-- **表达形式**：由用户目标和内容决定。需要结构化表达时可参考 [`lark-doc-style.md`](style/lark-doc-style.md)，但不要默认套用固定开头、固定富 block 比例或固定图表
-
 ## 参考
 
-- [`lark-doc-create-workflow.md`](style/lark-doc-create-workflow.md) — 从零创作工作流（Code-Act Loop、单 Agent 串行撰写）
-- [`lark-doc-style.md`](style/lark-doc-style.md) — 文档写作原则（默认段落、按体裁、组件克制）
+- [`lark-doc-design-philosophy.md`](lark-doc-design-philosophy.md) — 文档设计判断与组件取舍
 - [`lark-doc-xml.md`](lark-doc-xml.md) — XML 语法规范
 - [`lark-doc-fetch.md`](lark-doc-fetch.md) — 获取文档
 - [`lark-doc-update.md`](lark-doc-update.md) — 更新文档
