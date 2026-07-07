@@ -21,7 +21,7 @@ type profileListItem struct {
 	Name        string         `json:"name"`
 	AppID       string         `json:"appId"`
 	Brand       core.LarkBrand `json:"brand"`
-	Active      bool           `json:"active"`
+	Default     bool           `json:"default"`
 	User        string         `json:"user,omitempty"`
 	TokenStatus string         `json:"tokenStatus,omitempty"`
 }
@@ -30,7 +30,8 @@ type profileListItem struct {
 func NewCmdProfileList(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all profiles",
+		Short: "List saved profiles",
+		Long:  "Lists saved profiles. To see the app/profile lark-cli is using now, run `lark-cli whoami --json`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return profileListRun(f)
 		},
@@ -53,7 +54,7 @@ func profileListRun(f *cmdutil.Factory) error {
 		return nil
 	}
 
-	// Intentionally uses "" to show the persistent active profile, not the ephemeral --profile override.
+	// Intentionally uses "" to show the saved default profile, not the ephemeral --profile override.
 	currentApp := multi.CurrentAppConfig("")
 	currentName := ""
 	if currentApp != nil {
@@ -66,10 +67,10 @@ func profileListRun(f *cmdutil.Factory) error {
 		name := app.ProfileName()
 
 		item := profileListItem{
-			Name:   name,
-			AppID:  app.AppId,
-			Brand:  app.Brand,
-			Active: name == currentName,
+			Name:    name,
+			AppID:   app.AppId,
+			Brand:   app.Brand,
+			Default: name == currentName,
 		}
 
 		if len(app.Users) > 0 {

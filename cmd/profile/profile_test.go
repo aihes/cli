@@ -306,14 +306,21 @@ func TestProfileListRun_OutputsProfiles(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatalf("Unmarshal() error = %v; output=%s", err, stdout.String())
 	}
+	raw := stdout.String()
+	if strings.Contains(raw, `"active"`) {
+		t.Fatalf("profile list output contains legacy active field: %s", raw)
+	}
+	if !strings.Contains(raw, `"default"`) {
+		t.Fatalf("profile list output missing default field: %s", raw)
+	}
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2", len(got))
 	}
-	if got[0].Name != "default" || !got[0].Active {
-		t.Fatalf("got[0] = %#v, want active default profile", got[0])
+	if got[0].Name != "default" || !got[0].Default {
+		t.Fatalf("got[0] = %#v, want configured default profile", got[0])
 	}
-	if got[1].Name != "target" || got[1].Active {
-		t.Fatalf("got[1] = %#v, want inactive target profile", got[1])
+	if got[1].Name != "target" || got[1].Default {
+		t.Fatalf("got[1] = %#v, want non-default target profile", got[1])
 	}
 }
 
@@ -637,6 +644,22 @@ func TestProfileHelpHasSelectionSection(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Long, "LARKSUITE_CLI_PROFILE") {
 		t.Errorf("profile --help missing LARKSUITE_CLI_PROFILE")
+	}
+	if !strings.Contains(cmd.Long, "lark-cli whoami --json") {
+		t.Errorf("profile --help missing whoami identity route")
+	}
+	if !strings.Contains(cmd.Long, "config show / profile list") {
+		t.Errorf("profile --help missing saved-config boundary")
+	}
+}
+
+func TestProfileListHelpClarifiesSavedProfiles(t *testing.T) {
+	cmd := NewCmdProfileList(nil)
+	if !strings.Contains(cmd.Short, "saved profiles") {
+		t.Errorf("profile list short = %q, want saved profiles", cmd.Short)
+	}
+	if !strings.Contains(cmd.Long, "lark-cli whoami --json") {
+		t.Errorf("profile list help missing whoami route")
 	}
 }
 

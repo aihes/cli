@@ -84,6 +84,16 @@ func TestConfigShowCmd_FlagParsing(t *testing.T) {
 	}
 }
 
+func TestConfigShowHelpClarifiesSavedConfig(t *testing.T) {
+	cmd := NewCmdConfigShow(nil, nil)
+	if !strings.Contains(cmd.Short, "saved config") {
+		t.Errorf("config show short = %q, want saved config", cmd.Short)
+	}
+	if !strings.Contains(cmd.Long, "lark-cli whoami --json") {
+		t.Errorf("config show help missing whoami route")
+	}
+}
+
 func TestConfigShowRun_NotConfiguredReturnsStructuredError(t *testing.T) {
 	t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
 

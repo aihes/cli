@@ -27,7 +27,8 @@ func NewCmdConfigShow(f *cmdutil.Factory, runF func(*ConfigShowOptions) error) *
 
 	cmd := &cobra.Command{
 		Use:   "show",
-		Short: "Show current configuration",
+		Short: "Show saved config",
+		Long:  "Shows saved config. To see the app/profile lark-cli is using now, run `lark-cli whoami --json`.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if runF != nil {
 				return runF(opts)
