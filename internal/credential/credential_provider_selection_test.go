@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -169,6 +170,34 @@ func TestSelection_ConfigDefaultBrokenSecret_ProfileSecretInvalid(t *testing.T) 
 		t.Errorf("profile_secret_invalid must not attach a cause, got %v", errors.Unwrap(ce))
 	}
 	assertNoSecretLeak(t, "config-default-broken", ce.Message, ce.Hint, ce.AppID)
+}
+
+// Explicit profile requested but the config file is malformed. The load error
+// must be propagated (errors.Is ErrMalformedConfig) rather than masked as
+// profile_not_found, which would hide a real config problem and misdirect the
+// user to `profile list`. An absent config is separately still profile_not_found.
+func TestSelection_ExplicitProfile_MalformedConfig_PropagatesError(t *testing.T) {
+	t.Setenv(envvars.CliAppID, "")
+	t.Setenv(envvars.CliAppSecret, "")
+	t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
+	if err := os.MkdirAll(core.GetConfigDir(), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(core.GetConfigPath(), []byte("{ this is not valid json"), 0o600); err != nil {
+		t.Fatalf("write malformed config: %v", err)
+	}
+	cp := newProvider(t, "tenant_a", true)
+
+	_, err := cp.Selection(context.Background())
+	if err == nil {
+		t.Fatalf("expected error for malformed config, got nil")
+	}
+	if !errors.Is(err, core.ErrMalformedConfig) {
+		t.Fatalf("malformed config error not propagated: %v", err)
+	}
+	if prob, ok := errs.ProblemOf(err); ok && prob.Subtype == errs.SubtypeProfileNotFound {
+		t.Fatalf("malformed config masked as profile_not_found")
+	}
 }
 
 // State #3: P none, E partial (only APP_ID) -> app_credential_incomplete.
