@@ -128,7 +128,7 @@ lark-cli auth login --device-code <device_code>
 
 ## Profile 选择
 
-Profile selection: use `--profile` for one command; for a task/session, prefix later `lark-cli` commands with `LARKSUITE_CLI_PROFILE=<name>` unless shell env persists, where you may `export` once and later `unset`. Ask for the profile name if unknown; do not merely say which profile you will use. Use `whoami` for effective app/profile identity and `auth status --json --verify` for OAuth login/token state. Do not run `lark-cli profile use` unless the user asks to change the long-term default.
+Profile selection: use `--profile <profile-or-appId>` for one command; for a task/session, prefix later `lark-cli` commands with `LARKSUITE_CLI_PROFILE=<profile-or-appId>` unless shell env persists, where you may `export` once and later `unset`. Ask if the selector is unknown; do not merely promise. Use `whoami` for the effective app/profile identity and `auth status --json --verify` for OAuth token state. Do not run `lark-cli profile use` unless changing the long-term default, and do not set `LARKSUITE_CLI_APP_ID`/`LARKSUITE_CLI_APP_SECRET` unless direct credentials are provided.
 
 ## 更新检查
 
