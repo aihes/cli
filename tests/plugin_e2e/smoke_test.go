@@ -13,6 +13,7 @@ import (
 // any fork build runs. It lives here (not in harness.go) because `go test`
 // only discovers TestMain in a _test.go file — a TestMain defined in a plain
 // .go file is silently never invoked.
+// NOTE: exactly one TestMain is allowed per package — do not add another in other _test.go files here.
 func TestMain(m *testing.M) {
 	root, err := repoRoot()
 	if err != nil {
