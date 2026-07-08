@@ -10,34 +10,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// assertInstallEnvelope asserts the VERIFIED install-time failure envelope
-// shape shared by every reason_code in this file: exit 2, valid JSON on
-// stderr, error.type=="validation", error.subtype=="failed_precondition",
-// and error.hint containing "reason_code <wantReasonCode>". This mirrors
-// assertDenialEnvelope in restrict_test.go -- install-time failures render
-// through the SAME cmd/platform_guards.go WithHint(...) family as policy
-// denials, embedding reason_code in the hint STRING, not a structured
-// error.detail.reason_code field (contradicting the candidate shape
-// referenced from internal/platform/error.go:34's comment).
-func assertInstallEnvelope(t *testing.T, res result, wantReasonCode string) {
-	t.Helper()
-	if res.exit != 2 {
-		t.Fatalf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	}
-	if !gjson.Valid(res.stderr) {
-		t.Fatalf("stderr not JSON: %s", res.stderr)
-	}
-	if got := gjson.Get(res.stderr, "error.type").String(); got != "validation" {
-		t.Errorf("error.type=%q want validation", got)
-	}
-	if got := gjson.Get(res.stderr, "error.subtype").String(); got != "failed_precondition" {
-		t.Errorf("error.subtype=%q want failed_precondition", got)
-	}
-	if hint := gjson.Get(res.stderr, "error.hint").String(); !strings.Contains(hint, "reason_code "+wantReasonCode) {
-		t.Errorf("hint=%q want to contain reason_code %s", hint, wantReasonCode)
-	}
-}
-
 // multipleRestrictPlugin registers TWO distinct plugins that each call
 // Restrict() with an independently valid Rule. cmdpolicy.Resolve rejects
 // more than one distinct Restrict-owner regardless of each rule's own
@@ -83,7 +55,7 @@ func TestInstallMultipleRestrictPluginsPin(t *testing.T) {
 	bin := buildFork(t, "multiple-restrict", multipleRestrictPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "multiple_restrict_plugins")
+	assertReasonCodeEnvelope(t, res, "multiple_restrict_plugins")
 }
 
 // invalidRulePlugin registers a single plugin whose Restrict Rule carries a
@@ -121,7 +93,7 @@ func TestInstallInvalidRulePin(t *testing.T) {
 	bin := buildFork(t, "invalid-rule", invalidRulePlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "invalid_rule")
+	assertReasonCodeEnvelope(t, res, "invalid_rule")
 }
 
 // installFailedPlugin is a hand-written bare platform.Plugin (not
@@ -164,7 +136,7 @@ func TestInstallFailedPin(t *testing.T) {
 	bin := buildFork(t, "install-failed", installFailedPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "install_failed")
+	assertReasonCodeEnvelope(t, res, "install_failed")
 }
 
 // installPanicPlugin is a hand-written bare Plugin whose Install panics.
@@ -202,7 +174,7 @@ func TestInstallPanicPin(t *testing.T) {
 	bin := buildFork(t, "install-panic", installPanicPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "install_panic")
+	assertReasonCodeEnvelope(t, res, "install_panic")
 }
 
 // pluginNamePanicPlugin is a hand-written bare Plugin whose Name() panics.
@@ -240,7 +212,7 @@ func TestInstallPluginNamePanicPin(t *testing.T) {
 	bin := buildFork(t, "plugin-name-panic", pluginNamePanicPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "plugin_name_panic")
+	assertReasonCodeEnvelope(t, res, "plugin_name_panic")
 }
 
 // capabilitiesPanicPlugin is a hand-written bare Plugin whose Capabilities()
@@ -278,7 +250,7 @@ func TestInstallCapabilitiesPanicPin(t *testing.T) {
 	bin := buildFork(t, "capabilities-panic", capabilitiesPanicPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "capabilities_panic")
+	assertReasonCodeEnvelope(t, res, "capabilities_panic")
 }
 
 // restrictsMismatchPlugin is a hand-written bare Plugin that declares
@@ -316,7 +288,7 @@ func TestInstallRestrictsMismatchPin(t *testing.T) {
 	bin := buildFork(t, "restricts-mismatch", restrictsMismatchPlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertInstallEnvelope(t, res, "restricts_mismatch")
+	assertReasonCodeEnvelope(t, res, "restricts_mismatch")
 }
 
 // mustBuildPanicPlugin calls MustBuild() on a Builder with an invalid plugin

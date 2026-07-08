@@ -157,11 +157,15 @@ func init() {
 }
 `
 
-// assertDenialEnvelope asserts the VERIFIED denial envelope shape shared by
-// every reason_code in this file: exit 2, valid JSON on stderr,
+// assertReasonCodeEnvelope asserts the VERIFIED envelope shape shared by every
+// reason_code across this package -- both policy denials (this file) and
+// install-time failures (install_test.go): exit 2, valid JSON on stderr,
 // error.type=="validation", error.subtype=="failed_precondition", and
-// error.hint containing "reason_code <wantReasonCode>".
-func assertDenialEnvelope(t *testing.T, res result, wantReasonCode string) {
+// error.hint containing "reason_code <wantReasonCode>". Both paths render
+// through the SAME cmd/platform_guards.go WithHint(...) family, embedding
+// reason_code in the hint STRING, not a structured error.detail.reason_code
+// field (contradicting internal/platform/error.go:34's comment).
+func assertReasonCodeEnvelope(t *testing.T, res result, wantReasonCode string) {
 	t.Helper()
 	if res.exit != 2 {
 		t.Fatalf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
@@ -186,7 +190,7 @@ func TestIdentityMismatchDenial(t *testing.T) {
 	bin := buildFork(t, "identity", identityPlugin)
 	res := run(t, bin, "im", "+messages-search", "--as", "user")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertDenialEnvelope(t, res, "identity_mismatch")
+	assertReasonCodeEnvelope(t, res, "identity_mismatch")
 }
 
 // TestDenylistDenial pins reason_code=command_denylisted: a Deny glob hit
@@ -195,7 +199,7 @@ func TestDenylistDenial(t *testing.T) {
 	bin := buildFork(t, "denylist", denylistPlugin)
 	res := run(t, bin, "docs", "+search")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertDenialEnvelope(t, res, "command_denylisted")
+	assertReasonCodeEnvelope(t, res, "command_denylisted")
 }
 
 // TestMultiRuleDenial pins reason_code=no_matching_rule: a command rejected
@@ -205,5 +209,5 @@ func TestMultiRuleDenial(t *testing.T) {
 	bin := buildFork(t, "multirule", multiRulePlugin)
 	res := run(t, bin, "schema")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	assertDenialEnvelope(t, res, "no_matching_rule")
+	assertReasonCodeEnvelope(t, res, "no_matching_rule")
 }
