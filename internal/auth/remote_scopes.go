@@ -17,11 +17,12 @@ import (
 const (
 	remoteScopesPath    = "/lark-cli/apis/scopes.json"
 	remoteScopesTimeout = 1 * time.Second
-	maxRemoteScopesSize = 10 * 1024 * 1024 // 10MB，对齐 internal/registry/remote.go
+	maxRemoteScopesSize = 10 * 1024 * 1024 // 10MB, aligned with internal/registry/remote.go
 )
 
-// remoteScopesURLForTest 是单元测试注入 httptest server 的 seam；
-// 生产运行时为空，走 brand 硬编码生产地址。禁止用于承载任何内网 / 非生产域名的持久配置。
+// remoteScopesURLForTest is the injection seam for unit tests to point at an
+// httptest server. It is empty at runtime, where the brand-hardcoded production
+// URL is used, and must never carry an internal / non-production domain.
 var remoteScopesURLForTest string
 
 type remoteScopesFile struct {
@@ -40,10 +41,11 @@ func remoteScopesURL(brand core.LarkBrand) string {
 	return core.ResolveOpenBaseURL(brand) + remoteScopesPath
 }
 
-// FetchRemoteScopes 拉取并二值校验远端 scopes.json。
-// 返回 (业务域 -> user_scopes, true) 表示整份可用；(nil, false) 表示应回退本地。
-// 任何失败（网络/超时/非2xx/空/坏JSON/结构不符/畸形scope）均静默返回 (nil, false)，
-// 不打印告警、不埋点。
+// FetchRemoteScopes fetches and binary-validates the remote scopes.json.
+// It returns (domain -> user_scopes, true) when the whole file is usable, or
+// (nil, false) when the caller should fall back to the local set. Any failure
+// (network / timeout / non-2xx / empty / bad JSON / structure mismatch /
+// malformed scope) returns (nil, false) silently — no warning, no telemetry.
 func FetchRemoteScopes(brand core.LarkBrand) (map[string][]string, bool) {
 	client := transport.NewHTTPClient(remoteScopesTimeout)
 	req, err := http.NewRequest(http.MethodGet, remoteScopesURL(brand), nil)
@@ -75,7 +77,7 @@ func validateRemoteScopes(file remoteScopesFile) (map[string][]string, bool) {
 	}
 	result := make(map[string][]string, len(file.Scopes))
 	for domain, ds := range file.Scopes {
-		if ds.UserScopes == nil { // 缺 user_scopes 字段 / null → 整份不可信
+		if ds.UserScopes == nil { // missing user_scopes field / null → whole file untrusted
 			return nil, false
 		}
 		for _, s := range ds.UserScopes {
@@ -88,8 +90,9 @@ func validateRemoteScopes(file remoteScopesFile) (map[string][]string, bool) {
 	return result, true
 }
 
-// isValidScopeFormat 判定 service:resource:action 形态：按 ":" 恰好 3 段、每段非空。
-// resource 段允许 "." （如 vc:meeting.meetingevent:read）。i18n/tenant/version 不校验。
+// isValidScopeFormat checks the service:resource:action shape: exactly three
+// ":"-separated segments, each non-empty. The resource segment may contain "."
+// (e.g. vc:meeting.meetingevent:read). i18n / tenant / version are not checked.
 func isValidScopeFormat(s string) bool {
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 {

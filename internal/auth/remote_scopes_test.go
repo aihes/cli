@@ -87,7 +87,7 @@ func TestFetchRemoteScopesTimeoutFallsBack(t *testing.T) {
 }
 
 func TestRemoteScopesURLByBrand(t *testing.T) {
-	// seam 为空时走生产地址；实现使用 core.ResolveOpenBaseURL(brand) + path
+	// With an empty seam the production URL is used: core.ResolveOpenBaseURL(brand) + path
 	remoteScopesURLForTest = ""
 	feishu := remoteScopesURL(core.BrandFeishu)
 	lark := remoteScopesURL(core.BrandLark)
