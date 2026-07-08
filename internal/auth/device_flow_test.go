@@ -230,8 +230,8 @@ func TestPollDeviceToken_SuccessIncludesStatusMessage(t *testing.T) {
 		Method: "POST",
 		URL:    PathOAuthTokenV2,
 		Body: map[string]interface{}{
-			"access_token":             "tok",
-			"refresh_token":            "rtok",
+			"access_token":             "test-token",
+			"refresh_token":            "test-token",
 			"expires_in":               7200,
 			"refresh_token_expires_in": 604800,
 			"scope":                    "a:b:c",

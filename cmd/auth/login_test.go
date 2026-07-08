@@ -247,7 +247,7 @@ func TestResolveScopesForDomains_RemoteUsed(t *testing.T) {
 		"docs": {"docs:doc:read"},
 	}
 	got := resolveScopesForDomains([]string{"im"}, remote, true, core.BrandFeishu)
-	want := []string{"im:chat:read", "im:message:send"} // 去重后按 sort.Strings 升序
+	want := []string{"im:chat:read", "im:message:send"} // deduped, ascending by sort.Strings
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -266,10 +266,56 @@ func TestResolveScopesForDomains_UnionAcrossDomains(t *testing.T) {
 }
 
 func TestResolveScopesForDomains_FallbackToLocal(t *testing.T) {
-	// remoteOK=false → 回退本地 collectScopesForDomains；im 域应取到非空本地 scope
+	// remoteOK=false -> falls back to local collectScopesForDomains; im must yield non-empty local scopes
 	got := resolveScopesForDomains([]string{"im"}, nil, false, core.BrandFeishu)
 	if len(got) == 0 {
 		t.Fatal("fallback should return non-empty local scopes for im")
+	}
+}
+
+func TestLegalDomainsFor_RemoteUsed(t *testing.T) {
+	// includes "newbiz", a domain unknown to this CLI build, verifying a remote-listed domain is still legal
+	remote := map[string][]string{
+		"im":     {"im:message:send"},
+		"docs":   {"docs:doc:read"},
+		"newbiz": {"newbiz:thing:read"},
+	}
+	set, sorted := legalDomainsFor(remote, true, core.BrandFeishu)
+	wantSorted := []string{"docs", "im", "newbiz"} // remote keys, ascending by sort.Strings
+	if !reflect.DeepEqual(sorted, wantSorted) {
+		t.Fatalf("sorted = %v, want %v", sorted, wantSorted)
+	}
+	if len(set) != len(wantSorted) {
+		t.Fatalf("set size = %d, want %d", len(set), len(wantSorted))
+	}
+	for _, d := range wantSorted {
+		if !set[d] {
+			t.Errorf("set missing domain %q", d)
+		}
+	}
+	if !set["newbiz"] {
+		t.Error("remote-listed domain unknown to this build should still be legal")
+	}
+}
+
+func TestLegalDomainsFor_FallbackToLocal(t *testing.T) {
+	// remoteOK=false -> falls back to local allKnownDomains/sortedKnownDomains
+	set, sorted := legalDomainsFor(nil, false, core.BrandFeishu)
+	if len(sorted) == 0 {
+		t.Fatal("fallback should return non-empty local domain slice")
+	}
+	// set and sorted are two views of the same local domain set and must correspond
+	if len(set) != len(sorted) {
+		t.Fatalf("set size %d != sorted size %d", len(set), len(sorted))
+	}
+	for _, d := range sorted {
+		if !set[d] {
+			t.Errorf("set missing local domain %q", d)
+		}
+	}
+	// fallback adopts the local sort order directly, which must equal sortedKnownDomains
+	if want := sortedKnownDomains(core.BrandFeishu); !reflect.DeepEqual(sorted, want) {
+		t.Fatalf("sorted = %v, want sortedKnownDomains %v", sorted, want)
 	}
 }
 
