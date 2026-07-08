@@ -20,7 +20,6 @@ import (
 func buildEventData(runtime *common.RuntimeContext, startTs, endTs string) map[string]interface{} {
 	eventData := map[string]interface{}{
 		"summary":          runtime.Str("summary"),
-		"description":      runtime.Str("description"),
 		"start_time":       map[string]string{"timestamp": startTs},
 		"end_time":         map[string]string{"timestamp": endTs},
 		"attendee_ability": "can_modify_event",
@@ -30,8 +29,14 @@ func buildEventData(runtime *common.RuntimeContext, startTs, endTs string) map[s
 			{"minutes": 5},
 		},
 	}
+	if runtime.Cmd.Flags().Changed("description") {
+		eventData["description"] = runtime.Str("description")
+	}
 	if rrule := runtime.Str("rrule"); rrule != "" {
 		eventData["recurrence"] = rrule
+	}
+	if descriptionRich := runtime.Str("description-rich"); descriptionRich != "" {
+		eventData["description_rich"] = descriptionRich
 	}
 	return eventData
 }
@@ -99,7 +104,8 @@ var CalendarCreate = common.Shortcut{
 		{Name: "summary", Desc: "event title"},
 		{Name: "start", Desc: "start time (ISO 8601)", Required: true},
 		{Name: "end", Desc: "end time (ISO 8601)", Required: true},
-		{Name: "description", Desc: "event description"},
+		{Name: "description", Desc: "event description (plain text)"},
+		{Name: "description-rich", Desc: "rich-text description as Markdown (@file or - for stdin); supports bold/italic/underline/strikethrough, links, ordered/unordered lists, and GFM tables. A Lark doc URL (bare or as a Markdown link) is auto-resolved to an inline doc-mention chip showing its title. When set without --description, a plain-text preview is auto-derived so the client renders it immediately", Input: []string{common.File, common.Stdin}},
 		{Name: "attendee-ids", Desc: "attendee IDs, comma-separated (supports user ou_, chat oc_, room omm_)"},
 		{Name: "calendar-id", Desc: "calendar ID (default: primary)"},
 		{Name: "rrule", Desc: "recurrence rule (rfc5545)"},

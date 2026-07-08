@@ -32,7 +32,8 @@ lark-cli calendar +create --summary "..." --start "..." --end "..." \
 | `--summary <text>` | 否 | 日程标题。注意：标题中不应该出现时间、地点、人物信息 |
 | `--start <time>` | 是 | 开始时间（ISO 8601，如 `2026-03-12T14:00+08:00`） |
 | `--end <time>` | 是 | 结束时间（ISO 8601） |
-| `--description <text>` | 否 | 日程详细描述。提供会议议程、活动内容、注意事项或链接等。与 summary 配合使用，仅关注当前日程信息 |
+| `--description <text>` | 否 | 日程纯文本描述。提供会议议程、活动内容、注意事项或链接等。与 summary 配合使用，仅关注当前日程信息 |
+| `--description-rich <markdown>` | 否 | 日程富文本描述，使用 **Markdown** 格式。支持加粗、斜体、下划线（`<u>...</u>`）、删除线、链接 `[文本](url)`、有序/无序列表、以及 GFM 表格（`\| 列1 \| 列2 \|` + 分隔行 `\| --- \| --- \|`）。飞书文档 URL（直接粘贴裸链接，或写成 `[文本](url)`）会自动解析为内联文档，端上展示文档标题而非裸链接。支持 `@文件路径` 或 `-`（stdin）读取。需要富文本格式（如带链接、表格）时使用此参数而非 `--description`。只传 `--description-rich`（不带 `--description`）时，CLI 会自动从富文本派生一段纯文本预览回填 `description`，确保端上创建后即时展示富文本，无需再手动编辑保存 |
 | `--attendee-ids <id_list>` | 否 | 参与人 ID 列表（逗号分隔）。支持用户（`ou_`）、群组（`oc_`）和会议室（`omm_`）。AI 提取时请务必保留对应前缀 |
 | `--calendar-id <id>` | 否 | 日历 ID（省略则使用主日历） |
 | `--rrule <rrule>` | 否 | 重复日程的重复性规则，规则设置方式参考rfc5545。示例值："FREQ=DAILY;INTERVAL=1;UNTIL=<具体日期>" |

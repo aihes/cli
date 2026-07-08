@@ -43,7 +43,8 @@ lark-cli calendar +update \
 | `--event-id <id>` | 是 | 要更新的日程 ID。重复性日程请根据操作范围选择 ID，详见 [重复性日程操作规范](lark-calendar-recurring.md) |
 | `--calendar-id <id>` | 否 | 日历 ID（省略则使用 `primary`） |
 | `--summary <text>` | 否 | 新日程标题。仅在显式传入 `--summary` 时更新；若传空字符串，会把标题清空 |
-| `--description <text>` | 否 | 新日程描述。目前 API 方式不支持编辑富文本描述；如果日程描述通过客户端编辑为富文本内容，则使用 API 更新描述会导致富文本格式丢失。仅在显式传入 `--description` 时更新；若传空字符串，会把描述清空 |
+| `--description <text>` | 否 | 新日程纯文本描述。仅在显式传入 `--description` 时更新；若传空字符串，会把描述清空。注意：只传 `--description`（不带 `--description-rich`）会覆盖并清空原有富文本描述 |
+| `--description-rich <markdown>` | 否 | 新日程富文本描述，使用 **Markdown** 格式（加粗、斜体、下划线 `<u>...</u>`、删除线、链接 `[文本](url)`、有序/无序列表、以及 GFM 表格 `\| 列1 \| 列2 \|` + 分隔行 `\| --- \| --- \|`）。飞书文档 URL（裸链接或 `[文本](url)`）会自动解析为内联文档，端上展示文档标题。支持 `@文件路径` 或 `-`（stdin）读取。仅在显式传入时更新。需保留富文本格式时使用此参数而非 `--description`。 |
 | `--start <time>` | 否 | 新开始时间（ISO 8601，如 `2026-03-12T14:00+08:00`）。更新日程时间时必须同时传 `--end` |
 | `--end <time>` | 否 | 新结束时间（ISO 8601）。更新日程时间时必须同时传 `--start` |
 | `--rrule <rrule>` | 否 | 新重复规则（RFC5545）。**不要使用 COUNT；如需限制次数，推算后转为 UNTIL** |
@@ -52,12 +53,13 @@ lark-cli calendar +update \
 | `--notify` | 否 | 是否发送更新通知，默认 `true`。可用 `--notify=false` 静默更新 |
 | `--dry-run` | 否 | 预览 API 调用，不执行 |
 
-至少需要提供一个动作：`--summary`、`--description`、`--start/--end`、`--rrule`、`--add-attendee-ids` 或 `--remove-attendee-ids`。
+至少需要提供一个动作：`--summary`、`--description`、`--description-rich`、`--start/--end`、`--rrule`、`--add-attendee-ids` 或 `--remove-attendee-ids`。
 
 ## 使用规则
 
 - `--add-attendee-ids` 是**增量添加**，不是替换最终参与人列表。不要用它表达“只保留这些人”。
-- 对 `--summary`、`--description`，CLI 以“是否显式传入该 flag”判断是否更新，而不是以“值是否为空”判断；如果显式传入空字符串，会把对应字段清空。
+- 对 `--summary`、`--description`、`--description-rich`，CLI 以“是否显式传入该 flag”判断是否更新，而不是以“值是否为空”判断；如果显式传入空字符串，会把对应字段清空。
+- 富文本描述与纯文本描述互斥存储：需要保留/写入富文本时用 `--description-rich`；只传 `--description` 会清空原有富文本。
 - 只想增删参会人或会议室时，不需要同时传 `--summary`、`--start`、`--end` 等日程字段。
 - 只想修改标题、描述、时间或重复规则时，不需要同时传 `--add-attendee-ids` 或 `--remove-attendee-ids`。
 - 如需替换某个参与人、群组或会议室，使用 `--remove-attendee-ids <旧ID>` + `--add-attendee-ids <新ID>`。
