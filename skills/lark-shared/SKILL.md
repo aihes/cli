@@ -128,7 +128,7 @@ lark-cli auth login --device-code <device_code>
 
 ## Profile 选择
 
-Profile selection: current state -> `whoami --json`; OAuth/token -> `auth status --json --verify`; agent task -> add `--profile <profile-or-appId>` to every `lark-cli` command; same-shell script/batch -> `LARKSUITE_CLI_PROFILE=<profile-or-appId>` or export/unset; saved config -> `config show` / `profile list`; long-term default -> `profile use`. Ask if the profile is ambiguous; do not set `LARKSUITE_CLI_APP_ID`/`LARKSUITE_CLI_APP_SECRET` unless direct credentials are provided.
+Profile 选择：查当前实际生效身份 → `whoami --json`；查 OAuth 登录 / token 有效性 → `auth status --json --verify`；agent 任务 → 每条 `lark-cli` 命令都加 `--profile <profile-or-appId>`；同一 shell 的脚本 / 批处理 → 用 `LARKSUITE_CLI_PROFILE=<profile-or-appId>` 或 export/unset；查已保存的配置（非当前生效）→ `config show` / `profile list`；永久改默认 → `profile use`。profile 不明确时先问用户；除非用户提供了直连凭证，否则不要设置 `LARKSUITE_CLI_APP_ID` / `LARKSUITE_CLI_APP_SECRET`。
 
 ## 更新检查
 
