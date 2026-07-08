@@ -60,6 +60,17 @@ jobs:
       - name: Run plugin-integration L4 tests
         run: go test -count=1 -timeout=15m ./tests/plugin_e2e/...
 
+  sidecar-integration:
+    needs: fast-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+      - name: Run sidecar tag build + HMAC round-trip
+        run: make sidecar-test
+
   # ── Layer 2: Quality Gate ──────────────────────────────────────────
   unit-test:
     needs: fast-gate
@@ -427,7 +438,7 @@ jobs:
   # ── Results Gate (single required check for branch protection) ─────
   results:
     if: ${{ always() }}
-    needs: [fast-gate, unit-test, lint, script-test, deterministic-gate, coverage, deadcode, e2e-dry-run, e2e-live, security, license-header, plugin-integration]
+    needs: [fast-gate, unit-test, lint, script-test, deterministic-gate, coverage, deadcode, e2e-dry-run, e2e-live, security, license-header, plugin-integration, sidecar-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate results
@@ -448,6 +459,7 @@ jobs:
           echo "| L4 | security | ${{ needs.security.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| L4 | license-header | ${{ needs.license-header.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| L4 | plugin-integration | ${{ needs.plugin-integration.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| L4 | sidecar-integration | ${{ needs.sidecar-integration.result }} |" >> $GITHUB_STEP_SUMMARY
 
           # Any failure or cancellation in any job blocks the merge.
           # Legitimately skipped jobs (deadcode on push, e2e-live on fork,
@@ -465,7 +477,8 @@ jobs:
             "${{ needs.e2e-live.result }}" \
             "${{ needs.security.result }}" \
             "${{ needs.license-header.result }}" \
-            "${{ needs.plugin-integration.result }}"; do
+            "${{ needs.plugin-integration.result }}" \
+            "${{ needs.sidecar-integration.result }}"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               FAILED=1
             fi
