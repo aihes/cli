@@ -9,7 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -202,25 +202,6 @@ func TestSortedKnownDomains(t *testing.T) {
 	}
 }
 
-func TestGetShortcutOnlyDomainNames_HaveDescriptions(t *testing.T) {
-	for _, name := range getShortcutOnlyDomainNames() {
-		zhDesc := registry.GetServiceDescription(name, "zh")
-		enDesc := registry.GetServiceDescription(name, "en")
-		if zhDesc == "" {
-			t.Errorf("missing zh description for shortcut-only domain %q", name)
-		}
-		if enDesc == "" {
-			t.Errorf("missing en description for shortcut-only domain %q", name)
-		}
-	}
-}
-
-func TestGetShortcutOnlyDomainNames_IncludesNote(t *testing.T) {
-	if !slices.Contains(getShortcutOnlyDomainNames(), "note") {
-		t.Fatal("shortcut-only domains must include note so auth login can select vc:note:read")
-	}
-}
-
 func TestCollectScopesForDomains(t *testing.T) {
 	projects := registry.ListFromMetaProjects()
 	if len(projects) == 0 {
@@ -260,74 +241,35 @@ func TestCollectScopesForDomains_NonexistentDomain(t *testing.T) {
 	}
 }
 
-func TestGetDomainMetadata_IncludesFromMeta(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	nameSet := make(map[string]bool)
-	for _, dm := range domains {
-		nameSet[dm.Name] = true
+func TestResolveScopesForDomains_RemoteUsed(t *testing.T) {
+	remote := map[string][]string{
+		"im":   {"im:message:send", "im:chat:read"},
+		"docs": {"docs:doc:read"},
 	}
-
-	// from_meta projects must be present
-	for _, p := range registry.ListFromMetaProjects() {
-		if !nameSet[p] {
-			t.Errorf("from_meta project %q missing from getDomainMetadata", p)
-		}
+	got := resolveScopesForDomains([]string{"im"}, remote, true, core.BrandFeishu)
+	want := []string{"im:chat:read", "im:message:send"} // 去重后按 sort.Strings 升序
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
-func TestGetDomainMetadata_IncludesShortcutOnlyDomains(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	nameSet := make(map[string]bool)
-	for _, dm := range domains {
-		nameSet[dm.Name] = true
+func TestResolveScopesForDomains_UnionAcrossDomains(t *testing.T) {
+	remote := map[string][]string{
+		"im":   {"im:message:send"},
+		"docs": {"docs:doc:read"},
 	}
-
-	for _, name := range getShortcutOnlyDomainNames() {
-		if !nameSet[name] {
-			t.Errorf("shortcut-only domain %q missing from getDomainMetadata", name)
-		}
+	got := resolveScopesForDomains([]string{"im", "docs"}, remote, true, core.BrandFeishu)
+	want := []string{"docs:doc:read", "im:message:send"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
-func TestGetDomainMetadata_Sorted(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	for i := 1; i < len(domains); i++ {
-		if domains[i].Name < domains[i-1].Name {
-			t.Errorf("not sorted: %q before %q", domains[i-1].Name, domains[i].Name)
-		}
-	}
-}
-
-func TestGetDomainMetadata_HasTitleAndDescription(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	for _, dm := range domains {
-		if dm.Title == "" {
-			t.Errorf("domain %q has empty Title", dm.Name)
-		}
-	}
-}
-
-func TestAuthLoginRun_NonTerminal_NoFlags_RejectsWithHint(t *testing.T) {
-	f, _, stderr, _ := cmdutil.TestFactory(t, &core.CliConfig{
-		AppID: "cli_test", AppSecret: "secret", Brand: core.BrandFeishu,
-	})
-	// TestFactory has IsTerminal=false by default
-	opts := &LoginOptions{Factory: f, Ctx: context.Background()}
-	err := authLoginRun(opts)
-	if err == nil {
-		t.Fatal("expected error for non-terminal without flags")
-	}
-	// Should mention specifying scopes
-	msg := err.Error()
-	if !strings.Contains(msg, "scopes") {
-		t.Errorf("expected error to mention scopes, got: %s", msg)
-	}
-	// Stderr should explain the split-flow path for non-streaming agents.
-	stderrStr := stderr.String()
-	for _, want := range []string{"--no-wait --json", "final message of the turn", "--device-code"} {
-		if !strings.Contains(stderrStr, want) {
-			t.Errorf("expected stderr to mention %q, got: %s", want, stderrStr)
-		}
+func TestResolveScopesForDomains_FallbackToLocal(t *testing.T) {
+	// remoteOK=false → 回退本地 collectScopesForDomains；im 域应取到非空本地 scope
+	got := resolveScopesForDomains([]string{"im"}, nil, false, core.BrandFeishu)
+	if len(got) == 0 {
+		t.Fatal("fallback should return non-empty local scopes for im")
 	}
 }
 
@@ -376,7 +318,7 @@ func TestWriteLoginSuccess_JSONIncludesScopeDiff(t *testing.T) {
 		NewlyGranted:   []string{"im:message:send"},
 		AlreadyGranted: []string{"im:message:reply"},
 		Granted:        []string{"im:message:send", "im:message:reply"},
-	})
+	}, "")
 
 	var data map[string]interface{}
 	if err := json.Unmarshal(stdout.Bytes(), &data); err != nil {
@@ -406,7 +348,7 @@ func TestHandleLoginScopeIssue_NonJSONAlignsWithLoginSuccess(t *testing.T) {
 			Missing:   []string{"im:message:send"},
 			Granted:   []string{"base:app:copy"},
 		},
-	}, "ou_user", "tester")
+	}, "ou_user", "tester", "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -448,7 +390,7 @@ func TestHandleLoginScopeIssue_JSONAlignsWithLoginSuccess(t *testing.T) {
 			Missing:   []string{"im:message:send"},
 			Granted:   []string{"base:app:copy"},
 		},
-	}, "ou_user", "tester")
+	}, "ou_user", "tester", "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -480,7 +422,7 @@ func TestWriteLoginSuccess_JSONEmptySlicesNotNull(t *testing.T) {
 
 	writeLoginSuccess(&LoginOptions{JSON: true}, getLoginMsg("en"), f, "ou_user", "tester", &loginScopeSummary{
 		Granted: []string{"offline_access"},
-	})
+	}, "")
 
 	var data map[string]interface{}
 	if err := json.Unmarshal(stdout.Bytes(), &data); err != nil {
@@ -565,7 +507,7 @@ func TestWriteLoginSuccess_TextOutputScenarios(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f, _, stderr, _ := cmdutil.TestFactory(t, nil)
-			writeLoginSuccess(&LoginOptions{}, getLoginMsg("zh"), f, "ou_user", "tester", tt.summary)
+			writeLoginSuccess(&LoginOptions{}, getLoginMsg("zh"), f, "ou_user", "tester", tt.summary, "")
 
 			got := stderr.String()
 			for _, want := range tt.expectedPresent {
@@ -819,7 +761,7 @@ func TestWriteLoginSuccess_TextOutputEnglishIncludesStatusHintWhenNoMissingScope
 		Requested:    []string{"im:message:send"},
 		NewlyGranted: []string{"im:message:send"},
 		Granted:      []string{"im:message:send"},
-	})
+	}, "")
 
 	got := stderr.String()
 	for _, want := range []string{
@@ -1167,15 +1109,6 @@ func TestAuthLoginRun_JSONDeviceAuthorizationAgentHintIncludesRawURLGuidance(t *
 	}
 }
 
-func TestGetDomainMetadata_ExcludesEvent(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	for _, dm := range domains {
-		if dm.Name == "event" {
-			t.Error("event should not appear in interactive domain list")
-		}
-	}
-}
-
 func TestAllKnownDomains_ExcludesAuthDomainChildren(t *testing.T) {
 	domains := allKnownDomains("")
 	if domains["whiteboard"] {
@@ -1198,14 +1131,5 @@ func TestCollectScopesForDomains_ExpandsAuthDomainChildren(t *testing.T) {
 	}
 	if !found {
 		t.Error("collectScopesForDomains([docs]) should include whiteboard scopes (board:whiteboard:*)")
-	}
-}
-
-func TestGetDomainMetadata_ExcludesAuthDomainChildren(t *testing.T) {
-	domains := getDomainMetadata("zh")
-	for _, dm := range domains {
-		if dm.Name == "whiteboard" {
-			t.Error("whiteboard should not appear in interactive domain list (has auth_domain=docs)")
-		}
 	}
 }

@@ -49,6 +49,9 @@ func NewCmdAuthLogin(f *cmdutil.Factory, runF func(*LoginOptions) error) *cobra.
 		Short: "Device Flow authorization login",
 		Long: `Device Flow authorization login.
 
+With no --scope/--domain/--recommend flag, this requests scopes for all known
+business domains (equivalent to --domain all); pass --domain or --scope to narrow it.
+
 For AI agents: this command blocks until the user completes authorization in the
 browser. If your harness or agent tool only delivers final turn messages, use --no-wait --json,
 send the verification URL (or QR code) to the user as your final message, end the turn, then
@@ -71,7 +74,7 @@ to generate QR codes (supports ASCII and PNG formats).`,
 	cmdutil.SetRisk(cmd, "write")
 
 	cmd.Flags().StringVar(&opts.Scope, "scope", "", "scopes to request (space- or comma-separated). Combines additively with --domain/--recommend")
-	cmd.Flags().BoolVar(&opts.Recommend, "recommend", false, "request only recommended (auto-approve) scopes")
+	cmd.Flags().BoolVar(&opts.Recommend, "recommend", false, "request scopes for all known domains (equivalent to --domain all)")
 	var helpBrand core.LarkBrand
 	if f != nil && f.Config != nil {
 		if cfg, err := f.Config(); err == nil && cfg != nil {
@@ -144,33 +147,6 @@ func authLoginRun(opts *LoginOptions) error {
 	}
 
 	selectedDomains := opts.Domains
-	scopeLevel := "" // "common" or "all" (from interactive mode)
-
-	// Expand --domain all to all available domains (from_meta projects + shortcut services)
-	for _, d := range selectedDomains {
-		if strings.EqualFold(d, "all") {
-			selectedDomains = sortedKnownDomains(config.Brand)
-			break
-		}
-	}
-
-	// Validate domain names and suggest corrections for unknown ones
-	if len(selectedDomains) > 0 {
-		knownDomains := allKnownDomains(config.Brand)
-		for _, d := range selectedDomains {
-			if !knownDomains[d] {
-				if suggestion := suggestDomain(d, knownDomains); suggestion != "" {
-					return errs.NewValidationError(errs.SubtypeInvalidArgument, "unknown domain %q, did you mean %q?", d, suggestion).WithParam("--domain")
-				}
-				available := make([]string, 0, len(knownDomains))
-				for k := range knownDomains {
-					available = append(available, k)
-				}
-				sort.Strings(available)
-				return errs.NewValidationError(errs.SubtypeInvalidArgument, "unknown domain %q, available domains: %s", d, strings.Join(available, ", ")).WithParam("--domain")
-			}
-		}
-	}
 
 	hasAnyOption := opts.Scope != "" || opts.Recommend || len(selectedDomains) > 0
 
@@ -178,30 +154,51 @@ func authLoginRun(opts *LoginOptions) error {
 		return errs.NewValidationError(errs.SubtypeInvalidArgument, "--exclude requires --scope, --domain, or --recommend to be specified").WithParam("--exclude")
 	}
 
-	if !hasAnyOption {
-		if !opts.JSON && f.IOStreams.IsTerminal {
-			result, err := runInteractiveLogin(f.IOStreams, lang.Base(), msg, config.Brand)
-			if err != nil {
-				return err
+	// scopeOnly is the one path that must never touch the domain catalog
+	// (remote or local): --scope given alone, with neither --domain nor
+	// --recommend. Every other path — including bare `auth login`, now that
+	// the interactive picker is gone — needs the legal domain set to resolve
+	// scopes.
+	scopeOnly := opts.Scope != "" && !opts.Recommend && len(selectedDomains) == 0
+
+	var remote map[string][]string
+	var remoteOK bool
+
+	if !scopeOnly {
+		// Pull the remote scopes.json once for this login (not cached); any
+		// read failure (network/timeout/non-2xx/malformed) silently falls back
+		// to the local full computation — no warning, no telemetry.
+		remote, remoteOK = larkauth.FetchRemoteScopes(config.Brand)
+		legalDomains, allLegalDomains := legalDomainsFor(remote, remoteOK, config.Brand)
+
+		// Expand --domain all against the resolved legal domain set.
+		for _, d := range selectedDomains {
+			if strings.EqualFold(d, "all") {
+				selectedDomains = allLegalDomains
+				break
 			}
-			if result == nil {
-				return errs.NewValidationError(errs.SubtypeInvalidArgument, "no login options selected")
+		}
+
+		if len(selectedDomains) > 0 {
+			// Validate explicitly-supplied domain names and suggest corrections.
+			for _, d := range selectedDomains {
+				if !legalDomains[d] {
+					if suggestion := suggestDomain(d, legalDomains); suggestion != "" {
+						return errs.NewValidationError(errs.SubtypeInvalidArgument, "unknown domain %q, did you mean %q?", d, suggestion).WithParam("--domain")
+					}
+					available := make([]string, 0, len(legalDomains))
+					for k := range legalDomains {
+						available = append(available, k)
+					}
+					sort.Strings(available)
+					return errs.NewValidationError(errs.SubtypeInvalidArgument, "unknown domain %q, available domains: %s", d, strings.Join(available, ", ")).WithParam("--domain")
+				}
 			}
-			selectedDomains = result.Domains
-			scopeLevel = result.ScopeLevel
 		} else {
-			log(msg.HintHeader)
-			log("Common options:")
-			log(msg.HintCommon1)
-			log(msg.HintCommon2)
-			log(msg.HintCommon3)
-			log(msg.HintCommon4)
-			log("")
-			log("View all options:")
-			log(msg.HintFooter)
-			log("")
-			log("Note: this command blocks until authorization is complete. For non-streaming agent harnesses, use --no-wait --json, send the verification URL as the final message of the turn, then run --device-code in a later step after the user confirms authorization.")
-			return errs.NewValidationError(errs.SubtypeInvalidArgument, "please specify the scopes to authorize").WithParam("--scope")
+			// Bare `auth login` and `--recommend` without `--domain` both span
+			// the full legal domain set now that the interactive picker and
+			// the local auto-approve filter are gone (--recommend ≡ --domain all).
+			selectedDomains = allLegalDomains
 		}
 	}
 
@@ -215,19 +212,8 @@ func authLoginRun(opts *LoginOptions) error {
 	// --scope, --domain, and --recommend combine additively so callers can,
 	// for example, request all `docs` scopes plus a few specific `drive`
 	// scopes in a single command.
-	if len(selectedDomains) > 0 || opts.Recommend {
-		var candidateScopes []string
-		if len(selectedDomains) > 0 {
-			candidateScopes = collectScopesForDomains(selectedDomains, "user", config.Brand)
-		} else {
-			// --recommend without --domain: all domains
-			candidateScopes = collectScopesForDomains(sortedKnownDomains(config.Brand), "user", config.Brand)
-		}
-
-		// Filter to auto-approve scopes if --recommend or interactive "common"
-		if opts.Recommend || scopeLevel == "common" {
-			candidateScopes = registry.FilterAutoApproveScopes(candidateScopes)
-		}
+	if len(selectedDomains) > 0 {
+		candidateScopes := resolveScopesForDomains(selectedDomains, remote, remoteOK, config.Brand)
 
 		if len(candidateScopes) == 0 && opts.Scope == "" {
 			return errs.NewValidationError(errs.SubtypeInvalidArgument, "no matching scopes found, check domain/scope options")
@@ -382,10 +368,10 @@ func authLoginRun(opts *LoginOptions) error {
 	}
 
 	if issue := ensureRequestedScopesGranted(finalScope, result.Token.Scope, msg, scopeSummary); issue != nil {
-		return handleLoginScopeIssue(opts, msg, f, issue, openId, userName)
+		return handleLoginScopeIssue(opts, msg, f, issue, openId, userName, result.Token.StatusMessage)
 	}
 
-	writeLoginSuccess(opts, msg, f, openId, userName, scopeSummary)
+	writeLoginSuccess(opts, msg, f, openId, userName, scopeSummary, result.Token.StatusMessage)
 	return nil
 }
 
@@ -465,10 +451,10 @@ func authLoginPollDeviceCode(opts *LoginOptions, config *core.CliConfig, msg *lo
 	}
 
 	if issue := ensureRequestedScopesGranted(requestedScope, result.Token.Scope, msg, scopeSummary); issue != nil {
-		return handleLoginScopeIssue(opts, msg, f, issue, openId, userName)
+		return handleLoginScopeIssue(opts, msg, f, issue, openId, userName, result.Token.StatusMessage)
 	}
 
-	writeLoginSuccess(opts, msg, f, openId, userName, scopeSummary)
+	writeLoginSuccess(opts, msg, f, openId, userName, scopeSummary, result.Token.StatusMessage)
 	return nil
 }
 
@@ -550,6 +536,30 @@ func collectScopesForDomains(domains []string, identity string, brand core.LarkB
 	return result
 }
 
+// resolveScopesForDomains resolves the scope set for the given domains. When
+// the remote scopes.json is available it takes the union of each domain's
+// user_scopes from the remote result (remote is authoritative, including
+// domains this CLI build doesn't know about locally); otherwise it falls back
+// to the local synthesis via collectScopesForDomains. Always returns a
+// deduplicated, alphabetically sorted slice.
+func resolveScopesForDomains(domains []string, remote map[string][]string, remoteOK bool, brand core.LarkBrand) []string {
+	if remoteOK {
+		set := make(map[string]bool)
+		for _, d := range domains {
+			for _, s := range remote[d] {
+				set[s] = true
+			}
+		}
+		out := make([]string, 0, len(set))
+		for s := range set {
+			out = append(out, s)
+		}
+		sort.Strings(out)
+		return out
+	}
+	return collectScopesForDomains(domains, "user", brand)
+}
+
 // allKnownDomains returns all valid auth domain names (from_meta projects +
 // shortcut services), excluding domains that have auth_domain set (they are
 // folded into their parent domain).
@@ -580,6 +590,25 @@ func sortedKnownDomains(brand core.LarkBrand) []string {
 	}
 	sort.Strings(domains)
 	return domains
+}
+
+// legalDomainsFor returns the authoritative domain set for this login: the
+// remote scopes.json keys when available (a remote-listed domain unknown to
+// this CLI build is still legal), otherwise the local known-domain set.
+// Returns both a membership set (for --domain validation) and a sorted slice
+// (for `all` expansion and the bare-login/--recommend-without-domain default).
+func legalDomainsFor(remote map[string][]string, remoteOK bool, brand core.LarkBrand) (map[string]bool, []string) {
+	if remoteOK {
+		set := make(map[string]bool, len(remote))
+		sorted := make([]string, 0, len(remote))
+		for d := range remote {
+			set[d] = true
+			sorted = append(sorted, d)
+		}
+		sort.Strings(sorted)
+		return set, sorted
+	}
+	return allKnownDomains(brand), sortedKnownDomains(brand)
 }
 
 // shortcutSupportsIdentity checks if a shortcut supports the given identity ("user" or "bot").
