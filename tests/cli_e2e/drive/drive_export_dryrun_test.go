@@ -61,6 +61,96 @@ func TestDriveExportDryRun_FileNameMetadata(t *testing.T) {
 	}
 }
 
+func TestDriveExportDryRun_WikiURLPlansResolveBeforeExportTask(t *testing.T) {
+	setDriveDryRunConfigEnv(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	result, err := clie2e.RunCmd(ctx, clie2e.Request{
+		Args: []string{
+			"drive", "+export",
+			"--url", "https://example.feishu.cn/wiki/wikiDryRunExport",
+			"--file-extension", "pdf",
+			"--file-name", "wiki-report",
+			"--output-dir", "./exports",
+			"--dry-run",
+		},
+		DefaultAs: "bot",
+	})
+	require.NoError(t, err)
+	result.AssertExitCode(t, 0)
+
+	out := result.Stdout
+	if got := gjson.Get(out, "api.0.method").String(); got != "GET" {
+		t.Fatalf("api.0.method=%q, want GET\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.0.url").String(); got != "/open-apis/wiki/v2/spaces/get_node" {
+		t.Fatalf("api.0.url=%q, want wiki get_node\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.0.params.token").String(); got != "wikiDryRunExport" {
+		t.Fatalf("api.0.params.token=%q, want wiki token\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.method").String(); got != "POST" {
+		t.Fatalf("api.1.method=%q, want POST\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.url").String(); got != "/open-apis/drive/v1/export_tasks" {
+		t.Fatalf("api.1.url=%q, want export_tasks\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.body.token").String(); got != "obj_token_from_step_0" {
+		t.Fatalf("api.1.body.token=%q, want resolved token placeholder\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.body.type").String(); got != "obj_type_from_step_0" {
+		t.Fatalf("api.1.body.type=%q, want resolved type placeholder\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "wiki_token").String(); got != "wikiDryRunExport" {
+		t.Fatalf("wiki_token=%q, want source wiki token\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "file_name").String(); got != "wiki-report.pdf" {
+		t.Fatalf("file_name=%q, want wiki-report.pdf\nstdout:\n%s", got, out)
+	}
+}
+
+func TestDriveExportDryRun_WikiTokenTypePlansResolveBeforeExportTask(t *testing.T) {
+	setDriveDryRunConfigEnv(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	result, err := clie2e.RunCmd(ctx, clie2e.Request{
+		Args: []string{
+			"drive", "+export",
+			"--token", "wikiDryRunExport",
+			"--doc-type", "wiki",
+			"--file-extension", "pdf",
+			"--dry-run",
+		},
+		DefaultAs: "bot",
+	})
+	require.NoError(t, err)
+	result.AssertExitCode(t, 0)
+
+	out := result.Stdout
+	if got := gjson.Get(out, "api.0.method").String(); got != "GET" {
+		t.Fatalf("api.0.method=%q, want GET\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.0.url").String(); got != "/open-apis/wiki/v2/spaces/get_node" {
+		t.Fatalf("api.0.url=%q, want wiki get_node\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.0.params.token").String(); got != "wikiDryRunExport" {
+		t.Fatalf("api.0.params.token=%q, want wiki token\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.body.token").String(); got != "obj_token_from_step_0" {
+		t.Fatalf("api.1.body.token=%q, want resolved token placeholder\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "api.1.body.type").String(); got != "obj_type_from_step_0" {
+		t.Fatalf("api.1.body.type=%q, want resolved type placeholder\nstdout:\n%s", got, out)
+	}
+	if got := gjson.Get(out, "wiki_token").String(); got != "wikiDryRunExport" {
+		t.Fatalf("wiki_token=%q, want source wiki token\nstdout:\n%s", got, out)
+	}
+}
+
 func TestDriveExportDryRun_MarkdownFetchAPI(t *testing.T) {
 	setDriveDryRunConfigEnv(t)
 
