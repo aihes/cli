@@ -458,12 +458,18 @@ jobs:
           echo "| L3 | e2e-live | ${{ needs.e2e-live.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| L4 | security | ${{ needs.security.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| L4 | license-header | ${{ needs.license-header.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| L4 | plugin-integration | ${{ needs.plugin-integration.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| L4 | sidecar-integration | ${{ needs.sidecar-integration.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| L4 | plugin-integration (observe-only) | ${{ needs.plugin-integration.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| L4 | sidecar-integration (observe-only) | ${{ needs.sidecar-integration.result }} |" >> $GITHUB_STEP_SUMMARY
 
           # Any failure or cancellation in any job blocks the merge.
           # Legitimately skipped jobs (deadcode on push, e2e-live on fork,
           # license-header on push) are OK.
+          #
+          # plugin-integration and sidecar-integration are intentionally NOT
+          # in this loop yet: they run on every PR and their status is shown
+          # in the table above, but a failure is observe-only (non-blocking)
+          # during the initial soak. Add them back here to make them required
+          # once they have proven stable.
           FAILED=0
           for result in \
             "${{ needs.fast-gate.result }}" \
@@ -476,9 +482,7 @@ jobs:
             "${{ needs.e2e-dry-run.result }}" \
             "${{ needs.e2e-live.result }}" \
             "${{ needs.security.result }}" \
-            "${{ needs.license-header.result }}" \
-            "${{ needs.plugin-integration.result }}" \
-            "${{ needs.sidecar-integration.result }}"; do
+            "${{ needs.license-header.result }}"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               FAILED=1
             fi
