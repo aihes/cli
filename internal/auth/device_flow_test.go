@@ -216,3 +216,34 @@ func TestPollDeviceToken_DefaultsZeroIntervalToFiveSeconds(t *testing.T) {
 		t.Fatalf("PollDeviceToken() sent %d requests before context cancellation, want 0", got)
 	}
 }
+
+// TestPollDeviceToken_SuccessIncludesStatusMessage asserts that the success
+// branch reads the token response's status_message field verbatim into
+// DeviceFlowTokenData.StatusMessage. The CLI is a pure passthrough here — no
+// parsing/classification of the text.
+func TestPollDeviceToken_SuccessIncludesStatusMessage(t *testing.T) {
+	t.Parallel()
+
+	reg := &httpmock.Registry{}
+	t.Cleanup(func() { reg.Verify(t) })
+	reg.Register(&httpmock.Stub{
+		Method: "POST",
+		URL:    PathOAuthTokenV2,
+		Body: map[string]interface{}{
+			"access_token":             "tok",
+			"refresh_token":            "rtok",
+			"expires_in":               7200,
+			"refresh_token_expires_in": 604800,
+			"scope":                    "a:b:c",
+			"status_message":           "审批中，请等待管理员处理",
+		},
+	})
+
+	result := PollDeviceToken(context.Background(), httpmock.NewClient(reg), "cli_a", "secret_b", core.BrandFeishu, "device-code", 1, 10, nil)
+	if result == nil || !result.OK || result.Token == nil {
+		t.Fatalf("PollDeviceToken() = %+v, want OK with a token", result)
+	}
+	if result.Token.StatusMessage != "审批中，请等待管理员处理" {
+		t.Fatalf("StatusMessage = %q, want the approval-pending text", result.Token.StatusMessage)
+	}
+}

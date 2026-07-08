@@ -40,6 +40,7 @@ func TestHandleLoginScopeIssue_FailedJSON_PreservesScopeTriple(t *testing.T) {
 		},
 		"", // openId empty -> loginSucceeded = false
 		"tester",
+		"", // statusMessage unused on the failed-login path
 	)
 
 	if err == nil {
@@ -57,5 +58,26 @@ func TestHandleLoginScopeIssue_FailedJSON_PreservesScopeTriple(t *testing.T) {
 	}
 	if !reflect.DeepEqual(permErr.MissingScopes, missing) {
 		t.Errorf("MissingScopes = %v, want %v", permErr.MissingScopes, missing)
+	}
+}
+
+// TestAuthorizationCompletePayload_StatusMessage asserts that the
+// authorization response's status_message text is passed through into the
+// JSON payload verbatim (CLI does not parse/classify/truncate it), and
+// that the field is always present, using an empty string when there is no
+// message, consistent with the stable-output-shape convention already used
+// by "scope" and the other summary fields.
+func TestAuthorizationCompletePayload_StatusMessage(t *testing.T) {
+	summary := &loginScopeSummary{Granted: []string{"a:b:c"}}
+
+	p := authorizationCompletePayload("ou_x", "u", summary, nil, "审批中，请等待管理员处理")
+	if p["status_message"] != "审批中，请等待管理员处理" {
+		t.Fatalf("status_message = %v", p["status_message"])
+	}
+
+	// No message from upstream -> stable empty string, not an absent key.
+	p2 := authorizationCompletePayload("ou_x", "u", summary, nil, "")
+	if p2["status_message"] != "" {
+		t.Fatalf("empty status_message should be \"\", got %v", p2["status_message"])
 	}
 }

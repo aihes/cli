@@ -140,13 +140,15 @@ func writeLoginScopeBreakdown(errOut *cmdutil.IOStreams, msg *loginMsg, summary 
 }
 
 // writeLoginSuccess emits the successful login payload in either JSON or text
-// format together with the computed scope breakdown.
-func writeLoginSuccess(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory, openId, userName string, summary *loginScopeSummary) {
+// format together with the computed scope breakdown. statusMessage is the
+// authorization response's status_message text (e.g. pending-approval),
+// passed through verbatim into the JSON payload; text mode does not render it.
+func writeLoginSuccess(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory, openId, userName string, summary *loginScopeSummary, statusMessage string) {
 	if summary == nil {
 		summary = &loginScopeSummary{}
 	}
 	if opts.JSON {
-		b, _ := json.Marshal(authorizationCompletePayload(openId, userName, summary, nil))
+		b, _ := json.Marshal(authorizationCompletePayload(openId, userName, summary, nil, statusMessage))
 		fmt.Fprintln(f.IOStreams.Out, string(b))
 		return
 	}
@@ -161,14 +163,17 @@ func writeLoginSuccess(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory, op
 
 // handleLoginScopeIssue prints or returns a structured missing-scope result
 // while preserving a successful login outcome when authorization completed.
-func handleLoginScopeIssue(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory, issue *loginScopeIssue, openId, userName string) error {
+// statusMessage is the authorization response's status_message text, passed
+// through into the JSON payload when authorization actually succeeded
+// (partial grant); it is unused on the failed-login path.
+func handleLoginScopeIssue(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory, issue *loginScopeIssue, openId, userName, statusMessage string) error {
 	if issue == nil {
 		return nil
 	}
 	loginSucceeded := openId != ""
 	if opts.JSON {
 		if loginSucceeded {
-			b, _ := json.Marshal(authorizationCompletePayload(openId, userName, issue.Summary, issue))
+			b, _ := json.Marshal(authorizationCompletePayload(openId, userName, issue.Summary, issue, statusMessage))
 			fmt.Fprintln(f.IOStreams.Out, string(b))
 			return output.ErrBare(output.ExitAuth)
 		}
@@ -198,7 +203,13 @@ func handleLoginScopeIssue(opts *LoginOptions, msg *loginMsg, f *cmdutil.Factory
 
 // authorizationCompletePayload builds the JSON payload for a completed login,
 // optionally attaching a warning when requested scopes are missing.
-func authorizationCompletePayload(openId, userName string, summary *loginScopeSummary, issue *loginScopeIssue) map[string]interface{} {
+// statusMessage is the authorization response's status_message text (e.g.
+// "user hasn't chosen yet" / "tenant doesn't allow this" / "pending
+// approval"), passed through verbatim — the CLI does not parse, classify, or
+// truncate it. The key is always present; an empty string means
+// the upstream response carried no message, matching the stable-shape
+// convention used by the other summary fields above.
+func authorizationCompletePayload(openId, userName string, summary *loginScopeSummary, issue *loginScopeIssue, statusMessage string) map[string]interface{} {
 	if summary == nil {
 		summary = &loginScopeSummary{}
 	}
@@ -212,6 +223,7 @@ func authorizationCompletePayload(openId, userName string, summary *loginScopeSu
 		"already_granted": emptyIfNil(summary.AlreadyGranted),
 		"missing":         emptyIfNil(summary.Missing),
 		"granted":         emptyIfNil(summary.Granted),
+		"status_message":  statusMessage,
 	}
 	if issue != nil {
 		payload["warning"] = map[string]interface{}{
