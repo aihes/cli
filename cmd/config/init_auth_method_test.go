@@ -66,6 +66,18 @@ func TestResolveRegisterAuthMethod(t *testing.T) {
 	}
 }
 
+func TestExistingAppRequiresSecret(t *testing.T) {
+	if !existingAppRequiresSecret(core.AuthMethodClientSecret) {
+		t.Error("client_secret existing app should require App Secret")
+	}
+	if existingAppRequiresSecret("") != true {
+		t.Error("default existing app should require App Secret")
+	}
+	if existingAppRequiresSecret(core.AuthMethodPrivateKeyJWT) {
+		t.Error("private_key_jwt existing app should not require App Secret")
+	}
+}
+
 // TestValidatePKJWTKeyBinding covers the guard that rejects a registration
 // resolving to private_key_jwt with no signing key bound (e.g. an existing
 // secret-based app was selected on the confirm page).
