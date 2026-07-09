@@ -64,18 +64,22 @@ func gitArchive(root, dst string) error {
 		return err
 	}
 	extract.Stdin = pipe
-	var errBuf strings.Builder
-	archive.Stderr = &errBuf
-	extract.Stderr = &errBuf
+	// Each process gets its own stderr buffer: os/exec spawns a copy goroutine
+	// per command, so a shared strings.Builder would be written concurrently by
+	// both (git archive and tar run in parallel) -- a data race, since
+	// strings.Builder is not concurrency-safe.
+	var archiveErr, extractErr strings.Builder
+	archive.Stderr = &archiveErr
+	extract.Stderr = &extractErr
 	if err := extract.Start(); err != nil {
 		return err
 	}
 	if err := archive.Run(); err != nil {
 		_ = extract.Wait()
-		return fmt.Errorf("git archive: %w: %s", err, errBuf.String())
+		return fmt.Errorf("git archive: %w: %s", err, archiveErr.String())
 	}
 	if err := extract.Wait(); err != nil {
-		return fmt.Errorf("tar extract: %w: %s", err, errBuf.String())
+		return fmt.Errorf("tar extract: %w: %s", err, extractErr.String())
 	}
 	return nil
 }
