@@ -172,9 +172,9 @@ lark-cli drive +secure-label-list \
 ```bash
 lark-cli drive +secure-label-update \
   --token '<url>' \
-  --label-id '<label-id>' --as user --format json 
+  --label-id '<label-id>' --as user --format json # replace $LABEL_ID before running
 
 lark-cli drive +secure-label-update \
   --token '<bare-token>' --type '<type>' \
-  --label-id '<label-id>' --as user --format json 
+  --label-id '<label-id>' --as user --format json # replace $LABEL_ID before running
 ```
