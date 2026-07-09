@@ -648,6 +648,7 @@ func TestScanFileAllowsCredentialURLPlaceholders(t *testing.T) {
 func TestScanFileAllowsCredentialURLFixtures(t *testing.T) {
 	got := ScanFile("fixtures/network_test.go", []byte(strings.Join([]string{
 		`proxy := "http://user:pass@proxy:8080"`,
+		`proxy := "http://user:p%40ss@proxy:8080/path"`,
 		`repo := "https://u:t@h/r.git"`,
 		`target := "https://attacker:pw@open.feishu.cn"`,
 		`proxy := "http://admin:s3cret@127.0.0.1:3128"`,
@@ -840,7 +841,24 @@ func TestScanFileDetectsStrongAuthTokenKeysWithFixtureLikeValues(t *testing.T) {
 }
 
 func TestScanFileAllowsTestFixtureSecretValues(t *testing.T) {
-	got := ScanFile("fixtures/calendar_meeting_test.go", []byte(`AppID: "test-app", AppSecret: "test-secret", Brand: core.BrandFeishu,`+"\n"))
+	got := ScanFile("fixtures/calendar_meeting_test.go", []byte(strings.Join([]string{
+		`AppID: "test-app", AppSecret: "test-secret", Brand: core.BrandFeishu,`,
+		`cfg := &core.CliConfig{AppID: "a", AppSecret: "s"}`,
+		`os.WriteFile(path, []byte("FEISHU_APP_ID=cli_abc\nFEISHU_APP_SECRET=secret\n"), 0600)`,
+		`rt := &stubRoundTripper{respBody: ` + "`" + `{"access_token":"t","token_type":"Bearer"}` + "`" + `}`,
+		`cred := credential.NewCredentialProvider([]extcred.Provider{&fakeExtProvider{token: "real-token"}}, nil, nil, nil)`,
+		`const realToken = "real-tenant-access-token"`,
+		`envContent := "FEISHU_APP_ID=cli_hermes_abc\nFEISHU_APP_SECRET=hermes_secret_123\nFEISHU_DOMAIN=lark\n"`,
+		`content := "# Hermes config\nFEISHU_APP_ID=cli_abc123\nFEISHU_APP_SECRET=supersecret\n"`,
+		`os.WriteFile(path, []byte("FEISHU_APP_ID=cli_auto\nFEISHU_APP_SECRET=auto_secret\n"), 0600)`,
+		`os.WriteFile(path, []byte("FEISHU_APP_ID=cli_new_app\nFEISHU_APP_SECRET=new_secret\n"), 0600)`,
+		`if got := out.String(); got != "username=x-access-token\npassword=valid-pat\n\n" {`,
+		`if got := out.String(); got != "username=x-access-token\npassword=restored-pat\n\n" {`,
+		`if got := stdout.String(); got != "username=x-access-token\npassword=pat-token\n\n" {`,
+		`return &core.CliConfig{AppID: "dummy", AppSecret: "dummy"}`,
+		`os.WriteFile(path, []byte("API_KEY=replace-me\n"), 0600)`,
+		`body := "APP_ID=\"cli_xxxxx\"\nAPP_SECRET=\"xxxxx\"\n"`,
+	}, "\n")+"\n"))
 	for _, item := range got {
 		if item.Rule == "public_content_generic_credential" {
 			t.Fatalf("test fixture secret should not be credential finding: %#v", got)
@@ -848,8 +866,41 @@ func TestScanFileAllowsTestFixtureSecretValues(t *testing.T) {
 	}
 }
 
+func TestScanFileAllowsCredentialIdentifierFields(t *testing.T) {
+	got := ScanFile("fixtures/openapi_key_test.go", []byte(strings.Join([]string{
+		`"api_key_id": "k1",`,
+		`"secret_id": "s1",`,
+		`"token_id": "t1",`,
+		`"private_key_id": "pk1",`,
+	}, "\n")+"\n"))
+	for _, item := range got {
+		if item.Rule == "public_content_generic_credential" {
+			t.Fatalf("credential identifier fields should not be credential findings: %#v", got)
+		}
+	}
+}
+
+func TestScanFileDetectsCredentialShapedIdentifierFieldValues(t *testing.T) {
+	got := ScanFile("fixtures/openapi_key_test.go", []byte(strings.Join([]string{
+		`"api_key_id": "real-api-key-id",`,
+		`"token_id": "ghp_1234567890abcdef1234567890abcdef1234",`,
+	}, "\n")+"\n"))
+	var count int
+	for _, item := range got {
+		if item.Rule == "public_content_generic_credential" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("credential-shaped identifier field findings = %d, want 2: %#v", count, got)
+	}
+}
+
 func TestScanFileAllowsRegexpTokenValidators(t *testing.T) {
-	got := ScanFile("fixtures/minutes_detail.go", []byte("var validMinuteTokenDetail = regexp.MustCompile(`^[a-z0-9]+$`)\n"))
+	got := ScanFile("fixtures/minutes_detail.go", []byte(strings.Join([]string{
+		"var validMinuteTokenDetail = regexp.MustCompile(`^[a-z0-9]+$`)",
+		"REALISTIC_TOKEN_RE=\"\\\"${TOKEN_BODY}\\\"|\\`${TOKEN_BODY}\\`|\\\\b${TOKEN_BODY}\\\\b\"",
+	}, "\n")+"\n"))
 	for _, item := range got {
 		if item.Rule == "public_content_generic_credential" {
 			t.Fatalf("regexp token validator should not be credential finding: %#v", got)
@@ -923,6 +974,22 @@ func TestScanFileAllowsSourceCodeCredentialNonSecretLiterals(t *testing.T) {
 	for _, item := range got {
 		if item.Rule == "public_content_generic_credential" {
 			t.Fatalf("source code non-secret literals should not be credential findings: %#v", got)
+		}
+	}
+}
+
+func TestScanFileAllowsSourceCodeSyntheticCredentialIdentifiers(t *testing.T) {
+	got := ScanFile("fixtures/sheets_media.go", []byte(strings.Join([]string{
+		`const fakeOfficeTokenPrefix = "fake_office_"`,
+		`const localOfficeTokenPrefix = "local_office_"`,
+		`const imageLiveSecretMarker = "img_live_secret"`,
+		`const imageProdKeyMarker = "img_prod_key"`,
+		`if strings.HasPrefix(spreadsheetToken, fakeOfficeTokenPrefix) {`,
+		`if strings.HasPrefix(spreadsheetToken, localOfficeTokenPrefix) {`,
+	}, "\n")+"\n"))
+	for _, item := range got {
+		if item.Rule == "public_content_generic_credential" {
+			t.Fatalf("source code token prefix references should not be credential findings: %#v", got)
 		}
 	}
 }

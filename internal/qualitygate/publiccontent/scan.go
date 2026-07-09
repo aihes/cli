@@ -134,6 +134,9 @@ func isCredentialAssignmentMatch(match string) bool {
 	if isBenignTokenField(name) && !credentialShapedValue(value) {
 		return false
 	}
+	if isCredentialIdentifierField(name) && !credentialShapedValue(value) {
+		return false
+	}
 	if isWeakTokenCredentialKey(name) && !weakTokenValueLooksCredentialLike(value) {
 		return false
 	}
@@ -219,6 +222,17 @@ func isTokenMetadataField(key string) bool {
 		"token_endpoint",
 		"token_format",
 		"secret_name":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCredentialIdentifierField(key string) bool {
+	switch {
+	case key == "api_key_id":
+		return true
+	case strings.HasSuffix(key, "_api_key_id"):
 		return true
 	default:
 		return false
@@ -493,11 +507,17 @@ func isBenignCodeCredentialExpression(file, line, match, value string) bool {
 	if strings.HasPrefix(normalized, "regexp.MustCompile(") {
 		return true
 	}
-	if !sourceCodeFile(file) || credentialShapedValue(value) {
-		return false
+	if !sourceCodeFile(file) {
+		return testFixtureFile(file) && testFixtureCredentialLiteral(normalized)
 	}
 	if rhs, ok := sourceCodeTypedCredentialRHS(line, match); ok {
 		return isBenignTypedCredentialRHS(rhs)
+	}
+	if testFixtureFile(file) && testFixtureCredentialLiteral(normalized) {
+		return true
+	}
+	if credentialShapedValue(value) {
+		return false
 	}
 	rawValueQuoted := credentialAssignmentRawValueQuoted(match)
 	if sourceCodeLiteralLooksNonSecret(normalized, !rawValueQuoted) {
@@ -568,7 +588,7 @@ func credentialAssignmentRawValueQuoted(match string) bool {
 
 func sourceCodeFile(file string) bool {
 	switch filepath.Ext(file) {
-	case ".go", ".js", ".jsx", ".py", ".ts", ".tsx":
+	case ".go", ".js", ".jsx", ".py", ".sh", ".ts", ".tsx":
 		return true
 	default:
 		return false
@@ -593,6 +613,9 @@ func sourceCodeLiteralLooksNonSecret(value string, allowNumeric bool) bool {
 		sourceCodeFakeOrPlaceholderLiteral(literal) ||
 		sourceCodeCredentialTermLiteral(literal) ||
 		sourceCodeCredentialPrefixLiteral(literal) ||
+		sourceCodeLowEvidenceFixtureLiteral(literal) ||
+		sourceCodeStringExpressionLiteral(literal) ||
+		sourceCodeSyntheticIdentifierLiteral(literal) ||
 		sourceCodeVocabularyLiteral(literal) ||
 		sourceCodeSchemaTypeLiteral(literal) ||
 		benignCredentialStatusLiteral(literal)
@@ -685,6 +708,143 @@ func sourceCodeCredentialPrefixLiteral(value string) bool {
 	}
 }
 
+func sourceCodeLowEvidenceFixtureLiteral(value string) bool {
+	normalized := normalizeFixtureCredentialLiteral(value)
+	return simpleFixtureCredentialLiteral(normalized)
+}
+
+func sourceCodeStringExpressionLiteral(value string) bool {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" ||
+		credentialShapedIdentifier(strings.ToLower(normalized)) ||
+		highEntropyCredentialValue(strings.ToLower(normalized)) {
+		return false
+	}
+	return strings.Contains(normalized, "${") ||
+		strings.Contains(normalized, "$(") ||
+		(strings.Contains(normalized, `\b`) && strings.ContainsAny(normalized, "|[]{}()+*?"))
+}
+
+func sourceCodeSyntheticIdentifierLiteral(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" ||
+		strings.HasPrefix(normalized, "real_") ||
+		strings.HasPrefix(normalized, "real-") ||
+		credentialShapedIdentifier(normalized) ||
+		highEntropyCredentialValue(normalized) ||
+		!delimitedPlaceholderIdentifier(normalized) ||
+		!strings.ContainsAny(normalized, "_-") {
+		return false
+	}
+	var parts int
+	for _, part := range strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == '_' || r == '-'
+	}) {
+		if part != "" {
+			parts++
+		}
+	}
+	return parts >= 2
+}
+
+func testFixtureCredentialLiteral(value string) bool {
+	normalized := normalizeFixtureCredentialLiteral(value)
+	if simpleFixtureCredentialLiteral(normalized) {
+		return true
+	}
+	switch normalized {
+	case "real-token",
+		"real-tenant-access-token":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeFixtureCredentialLiteral(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Trim(value, `"'`)))
+	if before, _, ok := strings.Cut(normalized, `\n`); ok {
+		normalized = before
+	}
+	if before, _, ok := strings.Cut(normalized, `\r`); ok {
+		normalized = before
+	}
+	if before, _, ok := strings.Cut(normalized, "\n"); ok {
+		normalized = before
+	}
+	if before, _, ok := strings.Cut(normalized, "\r"); ok {
+		normalized = before
+	}
+	for {
+		next := strings.TrimSuffix(normalized, `\n`)
+		next = strings.TrimSuffix(next, `\r`)
+		next = strings.TrimSuffix(next, "\n")
+		next = strings.TrimSuffix(next, "\r")
+		if next == normalized {
+			break
+		}
+		normalized = strings.TrimSpace(next)
+	}
+	normalized = strings.TrimSpace(normalized)
+	normalized = strings.TrimPrefix(normalized, `\"`)
+	normalized = strings.TrimSuffix(normalized, `\"`)
+	return strings.TrimSpace(strings.Trim(normalized, `"'`))
+}
+
+func simpleFixtureCredentialLiteral(value string) bool {
+	if value == "" || credentialShapedIdentifier(value) || highEntropyCredentialValue(value) {
+		return false
+	}
+	if len(value) <= 3 && delimitedPlaceholderIdentifier(value) {
+		return true
+	}
+	switch value {
+	case "pass",
+		"pat-token",
+		"password",
+		"pat_abc",
+		"pw",
+		"s3cret",
+		"secret",
+		"secret_only",
+		"test":
+		return true
+	default:
+		return allXPlaceholder(value) || humanReadableFixtureCredentialLiteral(value)
+	}
+}
+
+func humanReadableFixtureCredentialLiteral(value string) bool {
+	if !delimitedPlaceholderIdentifier(value) {
+		return false
+	}
+	normalized := strings.ReplaceAll(value, "-", "_")
+	for _, marker := range []string{
+		"auto",
+		"dummy",
+		"example",
+		"fake",
+		"fixture",
+		"hermes",
+		"new",
+		"replace",
+		"restored",
+		"sample",
+		"super",
+		"test",
+		"valid",
+	} {
+		if normalized == marker ||
+			strings.HasPrefix(normalized, marker) ||
+			strings.HasSuffix(normalized, marker) ||
+			strings.Contains(normalized, marker+"_") ||
+			strings.Contains(normalized, "_"+marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func sourceCodeVocabularyLiteral(value string) bool {
 	switch strings.ToLower(value) {
 	case "bot", "tenant", "user":
@@ -753,7 +913,7 @@ func codeIdentifier(value string) bool {
 
 func isNonSecretLiteralValue(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(strings.Trim(value, `"'`))) {
-	case "true", "false", "null", "nil", "{", "[":
+	case "true", "false", "null", "nil", "{", "[", `\`:
 		return true
 	default:
 		return false
@@ -980,6 +1140,7 @@ func credentialURLPasswordFixture(password string) bool {
 	normalized := strings.ToLower(strings.Trim(password, `"'`))
 	switch normalized {
 	case "p",
+		"p%40ss",
 		"pass",
 		"password",
 		"pat_abc",
@@ -998,6 +1159,20 @@ func sourceOrTestFixtureFile(file string) bool {
 	return sourceCodeFile(normalized) ||
 		strings.HasPrefix(normalized, "testdata/") ||
 		strings.HasPrefix(normalized, "fixtures/") ||
+		strings.Contains(normalized, "/testdata/") ||
+		strings.Contains(normalized, "/fixtures/")
+}
+
+func testFixtureFile(file string) bool {
+	normalized := filepath.ToSlash(file)
+	base := filepath.Base(normalized)
+	return strings.Contains(base, "_test.") ||
+		strings.Contains(base, ".test.") ||
+		strings.Contains(base, "sample") ||
+		strings.HasPrefix(normalized, "tests/") ||
+		strings.HasPrefix(normalized, "testdata/") ||
+		strings.HasPrefix(normalized, "fixtures/") ||
+		strings.Contains(normalized, "/tests/") ||
 		strings.Contains(normalized, "/testdata/") ||
 		strings.Contains(normalized, "/fixtures/")
 }
