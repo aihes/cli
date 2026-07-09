@@ -189,8 +189,8 @@ func init() {
 //	  "subtype":"transport","message":"API call failed: Post
 //	  \"https://open.feishu.cn/open-apis/authen/v2/oauth/token\": extension
 //	  \"abort-transport\" aborted round trip: aborted for test"}}
-//	run 2: exit=4 stderr={... same shape, message targets
-//	  ".../open-apis/docs_ai/v1/documents/nonexistent/fetch" instead ...}
+//	run 2: exit=4 stderr={... same shape, message targets the docs fetch
+//	  endpoint instead of the OAuth token URL ...}
 func TestSubsystemTransportAbort(t *testing.T) {
 	bin := buildFork(t, "transport-abort", transportAbortPlugin)
 	res := run(t, bin, "docs", "+fetch", "--doc", "nonexistent")
