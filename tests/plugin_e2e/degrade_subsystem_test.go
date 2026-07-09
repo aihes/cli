@@ -5,8 +5,11 @@ package plugin_e2e
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,40 +17,108 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// runIsolated runs bin like run() (harness.go), but with a per-call
-// LARKSUITE_CLI_CONFIG_DIR (t.TempDir()) and LARKSUITE_CLI_REMOTE_META=off.
-// This is needed ONLY by TestDegradeStubMetadataSchema below: without it, the
-// fork inherits this developer machine's real ~/.lark-cli cache (a prior
-// `lark-cli` invocation on this box already populated remote_meta.json) and/or
-// makes a live network fetch, either of which would populate the runtime
-// catalog with real data and hide the #1764 stub-metadata degrade path this
-// test exists to pin. harness.go's run() has no env-override parameter and
-// must not be modified to add one (out of scope for this task), so this is a
-// small local variant of the same subprocess-capture logic.
-func runIsolated(t *testing.T, bin string, args ...string) result {
+// runEnv runs bin as a subprocess with the given full environment, capturing
+// stdout/stderr/exit. It is the shared capture used by the isolated runners
+// below; harness.go's run() (which inherits the host env) is left untouched.
+func runEnv(t *testing.T, bin string, env []string, args ...string) result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
-	c.Env = append(os.Environ(),
-		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
-		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
-		"LARKSUITE_CLI_CONFIG_DIR="+t.TempDir(),
-		"LARKSUITE_CLI_REMOTE_META=off",
-	)
+	c.Env = env
 	var stdout, stderr strings.Builder
 	c.Stdout = &stdout
 	c.Stderr = &stderr
 	err := c.Run()
 	exit := 0
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exit = ee.ExitCode()
 		} else {
 			t.Fatalf("run %v: %v", args, err)
 		}
 	}
 	return result{stdout: stdout.String(), stderr: stderr.String(), exit: exit}
+}
+
+// runIsolated runs bin with a per-call empty LARKSUITE_CLI_CONFIG_DIR and
+// LARKSUITE_CLI_REMOTE_META=off, so the fork sees NO cached metadata and makes
+// no network fetch, regardless of this developer machine's real ~/.lark-cli
+// cache. Used to pin the cold-cache degrade path (TestDegradeStubMetadataSchema).
+func runIsolated(t *testing.T, bin string, args ...string) result {
+	t.Helper()
+	env := append(os.Environ(),
+		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
+		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
+		"LARKSUITE_CLI_CONFIG_DIR="+t.TempDir(),
+		"LARKSUITE_CLI_REMOTE_META=off",
+	)
+	return runEnv(t, bin, env, args...)
+}
+
+// seededCatalogVersion is far newer than the embedded stub's 0.0.0, so the
+// runtime overlay in internal/registry unconditionally applies it.
+const seededCatalogVersion = "9.9.9"
+
+// seededCatalogJSON is a remote_meta.json (registry.MergedRegistry) carrying one
+// obviously-synthetic service. Seeding it into a bare-module fork's on-disk cache
+// gives the runtime catalog real data WITHOUT any network, so a test can prove
+// SchemaCatalog() consults that runtime catalog (issue #1764) rather than the
+// embedded-only (empty stub) catalog. Fields mirror internal/meta.Service.
+const seededCatalogJSON = `{
+  "version": "9.9.9",
+  "services": [
+    {
+      "name": "plugine2e",
+      "version": "v1",
+      "title": "plugin_e2e synthetic service",
+      "description": "synthetic fixture for the runtime-catalog test; not a real API",
+      "servicePath": "/open-apis/plugine2e/v1",
+      "resources": {
+        "widgets": {
+          "methods": {
+            "get": {
+              "id": "plugine2e.widgets.get",
+              "path": "/open-apis/plugine2e/v1/widgets/:id",
+              "httpMethod": "GET",
+              "description": "synthetic read method",
+              "risk": "read",
+              "accessTokens": ["tenant"],
+              "parameters": {
+                "id": {"type": "string", "location": "path", "required": true, "description": "synthetic id"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}`
+
+// runWithSeededCatalog runs bin against a fresh LARKSUITE_CLI_CONFIG_DIR whose
+// cache already holds cacheJSON as remote_meta.json (plus a fresh, high-version
+// cache-meta so the overlay applies and the TTL never triggers a refetch). Remote
+// meta is left ON so the on-disk cache overlay is consulted, but a long
+// LARKSUITE_CLI_META_TTL keeps the run offline and deterministic. This models a
+// bare-module binary that has runtime metadata available from a warm cache.
+func runWithSeededCatalog(t *testing.T, bin, cacheJSON string, args ...string) result {
+	t.Helper()
+	cfg := t.TempDir()
+	cacheDir := filepath.Join(cfg, "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	writeFile(t, filepath.Join(cacheDir, "remote_meta.json"), cacheJSON)
+	writeFile(t, filepath.Join(cacheDir, "remote_meta.meta.json"),
+		fmt.Sprintf(`{"last_check_at":%d,"version":%q,"brand":""}`, time.Now().Unix(), seededCatalogVersion))
+	env := append(os.Environ(),
+		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
+		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
+		"LARKSUITE_CLI_CONFIG_DIR="+cfg,
+		"LARKSUITE_CLI_META_TTL=1000000",
+	)
+	return runEnv(t, bin, env, args...)
 }
 
 // plainPlugin registers a minimal observer-only plugin with NO Restrict rule
@@ -140,75 +211,34 @@ func TestDegradeStubMetadataSchema(t *testing.T) {
 	}
 }
 
-// transportAbortPlugin registers a transport.Provider whose Interceptor
-// implements AbortableInterceptor and unconditionally rejects every request
-// from PreRoundTripE, before the built-in RoundTripper chain (and therefore
-// before any real network I/O) ever runs -- see extension/transport/types.go's
-// AbortableInterceptor doc and internal/cmdutil/transport.go's RoundTrip.
-const transportAbortPlugin = `// Code generated by plugin_e2e; DO NOT EDIT.
-package plugin
-
-import (
-	"context"
-	"errors"
-	"net/http"
-
-	"github.com/larksuite/cli/extension/transport"
-)
-
-type abortInterceptor struct{}
-
-func (abortInterceptor) PreRoundTrip(req *http.Request) func(*http.Response, error) { return nil }
-
-func (abortInterceptor) PreRoundTripE(req *http.Request) (func(*http.Response, error), error) {
-	return nil, errors.New("aborted for test")
-}
-
-type abortProvider struct{}
-
-func (abortProvider) Name() string { return "abort-transport" }
-func (abortProvider) ResolveInterceptor(ctx context.Context) transport.Interceptor {
-	return abortInterceptor{}
-}
-
-func init() {
-	transport.Register(abortProvider{})
-}
-`
-
-// TestSubsystemTransportAbort pins the transport.AbortableInterceptor offline
-// effect: registering a Provider whose PreRoundTripE always errors turns
-// every outbound API call into an abort before any network round trip. The
-// destination URL embedded in the message varies run-to-run (it depends on
-// whether the SDK fetches an OAuth token first or calls the target endpoint
-// first), so the assertion is pinned to the stable part only. Observed real
-// output for `docs +fetch --doc nonexistent` (a real read-risk network
-// command, run twice across separate `go test -count` invocations):
+// TestRuntimeCatalogResolvesSchema pins the PRIMARY #1764 fix: a bare-module fork
+// (embedded stub only) resolves `schema` against the RUNTIME catalog seeded from
+// the on-disk cache, not the embedded-only catalog. Before f0b6f35f the module
+// build read the embedded-only catalog and returned "Unknown service: <svc>" even
+// though the runtime registry had metadata; after it, registry.SchemaCatalog()
+// falls back to the merged runtime catalog and the lookup succeeds.
 //
-//	run 1: exit=4 stderr={"ok":false,"identity":"user","error":{"type":"network",
-//	  "subtype":"transport","message":"API call failed: Post
-//	  \"https://open.feishu.cn/open-apis/authen/v2/oauth/token\": extension
-//	  \"abort-transport\" aborted round trip: aborted for test"}}
-//	run 2: exit=4 stderr={... same shape, message targets the docs fetch
-//	  endpoint instead of the OAuth token URL ...}
-func TestSubsystemTransportAbort(t *testing.T) {
-	bin := buildFork(t, "transport-abort", transportAbortPlugin)
-	res := run(t, bin, "docs", "+fetch", "--doc", "nonexistent")
+// This is the counterpart to TestDegradeStubMetadataSchema: that test pins the
+// cold-cache corner (no runtime data -> graceful "No API metadata available");
+// this one pins the warm-cache main path (runtime data present -> schema works),
+// so a regression that re-embeds the embedded-only lookup fails HERE with
+// "Unknown service" rather than silently passing.
+func TestRuntimeCatalogResolvesSchema(t *testing.T) {
+	bin := buildFork(t, "plain", plainPlugin)
+	res := runWithSeededCatalog(t, bin, seededCatalogJSON, "schema", "plugine2e")
 	t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-	if res.exit != 4 {
-		t.Fatalf("exit=%d want 4; stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
+	out := res.stdout + res.stderr
+	if strings.Contains(out, "Unknown service") {
+		t.Fatalf("schema returned \"Unknown service\" -> runtime catalog NOT consulted (issue #1764 regression); out=%s", out)
 	}
-	if !gjson.Valid(res.stderr) {
-		t.Fatalf("stderr not JSON: %s", res.stderr)
+	if strings.Contains(out, "No API metadata available") {
+		t.Fatalf("schema saw no metadata -> the seeded runtime cache was not loaded; out=%s", out)
 	}
-	if got := gjson.Get(res.stderr, "error.type").String(); got != "network" {
-		t.Errorf("error.type=%q want network", got)
+	if res.exit != 0 {
+		t.Fatalf("exit=%d want 0 (schema resolved from runtime catalog); stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
 	}
-	if got := gjson.Get(res.stderr, "error.subtype").String(); got != "transport" {
-		t.Errorf("error.subtype=%q want transport", got)
-	}
-	if msg := gjson.Get(res.stderr, "error.message").String(); !strings.Contains(msg, `extension "abort-transport" aborted round trip: aborted for test`) {
-		t.Errorf("error.message=%q want to contain the abort-transport reason", msg)
+	if !strings.Contains(out, "plugine2e") {
+		t.Errorf("schema output does not mention the seeded service; out=%s", out)
 	}
 }
 

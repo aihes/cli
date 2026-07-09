@@ -37,6 +37,14 @@ func init() {
 // structured field.
 func TestReadonlyDenial(t *testing.T) {
 	bin := buildFork(t, "readonly", readonlyPlugin)
+	// Note: reason_code mixed_children_policy is intentionally NOT covered here.
+	// It requires a parent command whose *enumerated children* have mixed
+	// allow/deny outcomes, which needs the full command tree from API metadata.
+	// This L4 harness builds a bare-module fork (embedded stub only), so offline
+	// a parent like "sheets" has no known children and collapses to
+	// domain_not_allowed -- identical to the "leaf out of allow list" case and
+	// not a distinct reason_code. Covered instead by the in-process cmdpolicy
+	// unit tests, which construct a mixed-children tree directly.
 	cases := []struct {
 		name       string
 		args       []string
@@ -44,26 +52,10 @@ func TestReadonlyDenial(t *testing.T) {
 	}{
 		{"write in allowed domain", []string{"docs", "+update", "--doc-token", "x", "--content", "y"}, "write_not_allowed"},
 		{"leaf out of allow list", []string{"schema"}, "domain_not_allowed"},
-		{"parent group all children denied", []string{"sheets"}, "mixed_children_policy"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := run(t, bin, tc.args...)
-			if res.exit != 2 {
-				t.Fatalf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
-			}
-			if !gjson.Valid(res.stderr) {
-				t.Fatalf("stderr not JSON: %s", res.stderr)
-			}
-			if got := gjson.Get(res.stderr, "error.type").String(); got != "validation" {
-				t.Errorf("error.type=%q want validation", got)
-			}
-			if got := gjson.Get(res.stderr, "error.subtype").String(); got != "failed_precondition" {
-				t.Errorf("error.subtype=%q want failed_precondition", got)
-			}
-			if hint := gjson.Get(res.stderr, "error.hint").String(); !strings.Contains(hint, "reason_code "+tc.reasonCode) {
-				t.Errorf("hint=%q want to contain reason_code %s", hint, tc.reasonCode)
-			}
+			assertReasonCodeEnvelope(t, run(t, bin, tc.args...), tc.reasonCode)
 		})
 	}
 }

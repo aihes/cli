@@ -21,6 +21,8 @@ package plugin_e2e
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,16 +50,35 @@ func repoRoot() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// gitArchive extracts HEAD's committed tree into dst. Only tracked files are
-// included — gitignored build artifacts (e.g. the fetched meta_data.json) are
-// absent, exactly as a module consumer would see them.
+// gitArchive extracts HEAD's committed tree into dst by streaming `git archive`
+// into `tar -x`. Only tracked files are included — gitignored build artifacts
+// (e.g. the fetched meta_data.json) are absent, exactly as a module consumer
+// would see them. It wires the two processes with an explicit pipe rather than a
+// shell, so dst never reaches a shell command line.
 func gitArchive(root, dst string) error {
-	c := exec.Command("bash", "-c", "git archive HEAD | tar -x -C "+shellQuote(dst))
-	c.Dir = root
-	return runCmd(c)
+	archive := exec.Command("git", "archive", "HEAD")
+	archive.Dir = root
+	extract := exec.Command("tar", "-x", "-C", dst)
+	pipe, err := archive.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	extract.Stdin = pipe
+	var errBuf strings.Builder
+	archive.Stderr = &errBuf
+	extract.Stderr = &errBuf
+	if err := extract.Start(); err != nil {
+		return err
+	}
+	if err := archive.Run(); err != nil {
+		_ = extract.Wait()
+		return fmt.Errorf("git archive: %w: %s", err, errBuf.String())
+	}
+	if err := extract.Wait(); err != nil {
+		return fmt.Errorf("tar extract: %w: %s", err, errBuf.String())
+	}
+	return nil
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // builtForks caches fork binaries by name so identical forks are built once.
 var builtForks = map[string]string{}
@@ -144,7 +165,8 @@ func run(t *testing.T, bin string, args ...string) result {
 	err := c.Run()
 	exit := 0
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exit = ee.ExitCode()
 		} else {
 			t.Fatalf("run %v: %v", args, err)
@@ -159,17 +181,3 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
-
-func runCmd(c *exec.Cmd) error {
-	if out, err := c.CombinedOutput(); err != nil {
-		return &cmdError{err: err, out: out}
-	}
-	return nil
-}
-
-type cmdError struct {
-	err error
-	out []byte
-}
-
-func (e *cmdError) Error() string { return e.err.Error() + ": " + string(e.out) }
