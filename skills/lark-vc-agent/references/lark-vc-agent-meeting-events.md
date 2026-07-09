@@ -18,13 +18,7 @@
 | 场景 | 推荐权限 |
 |------|----------|
 | UAT / 用户身份 `--as user` | `vc:meeting.meetingevent:read` |
-| TAT / 应用身份 `--as bot` | `vc:meeting.bot.join:write` |
-
-注意：
-
-- 这里的 TAT 建议只说明 CLI 当前为应用身份声明了 `vc:meeting.bot.join:write` 这条窄版权限路径，不代表服务端已经把会中事件读取降成“无数据范围风险”的纯读点位。
-- 应用身份是否能真正读到事件，仍取决于应用机器人是否在会中或曾在会中、租户安装、权限可访问的数据范围，以及后端对该会议的可见性判断。
-- 如果你的目标是最小化读权限，优先使用用户身份并开通 `vc:meeting.meetingevent:read`。
+| TAT / 应用身份 `--as bot` | 推荐申请 `vc:meeting.bot.join:write` |
 
 ## 命令
 
