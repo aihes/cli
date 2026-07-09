@@ -4,11 +4,8 @@
 package plugin_e2e
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,46 +13,6 @@ import (
 
 	"github.com/tidwall/gjson"
 )
-
-// runEnv runs bin as a subprocess with the given full environment, capturing
-// stdout/stderr/exit. It is the shared capture used by the isolated runners
-// below; harness.go's run() (which inherits the host env) is left untouched.
-func runEnv(t *testing.T, bin string, env []string, args ...string) result {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	c := exec.CommandContext(ctx, bin, args...)
-	c.Env = env
-	var stdout, stderr strings.Builder
-	c.Stdout = &stdout
-	c.Stderr = &stderr
-	err := c.Run()
-	exit := 0
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			exit = ee.ExitCode()
-		} else {
-			t.Fatalf("run %v: %v", args, err)
-		}
-	}
-	return result{stdout: stdout.String(), stderr: stderr.String(), exit: exit}
-}
-
-// runIsolated runs bin with a per-call empty LARKSUITE_CLI_CONFIG_DIR and
-// LARKSUITE_CLI_REMOTE_META=off, so the fork sees NO cached metadata and makes
-// no network fetch, regardless of this developer machine's real ~/.lark-cli
-// cache. Used to pin the cold-cache degrade path (TestDegradeStubMetadataSchema).
-func runIsolated(t *testing.T, bin string, args ...string) result {
-	t.Helper()
-	env := append(os.Environ(),
-		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
-		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
-		"LARKSUITE_CLI_CONFIG_DIR="+t.TempDir(),
-		"LARKSUITE_CLI_REMOTE_META=off",
-	)
-	return runEnv(t, bin, env, args...)
-}
 
 // seededCatalogVersion is far newer than the embedded stub's 0.0.0, so the
 // runtime overlay in internal/registry unconditionally applies it.
@@ -118,7 +75,7 @@ func runWithSeededCatalog(t *testing.T, bin, cacheJSON string, args ...string) r
 		"LARKSUITE_CLI_CONFIG_DIR="+cfg,
 		"LARKSUITE_CLI_META_TTL=1000000",
 	)
-	return runEnv(t, bin, env, args...)
+	return runWithEnv(t, bin, env, args...)
 }
 
 // plainPlugin registers a minimal observer-only plugin with NO Restrict rule
@@ -147,8 +104,8 @@ func init() {
 // TestDegradeStubMetadataSchema pins the #1764 stub-metadata degrade path.
 // The clean tree embeds only the empty meta_data_default.json stub
 // (internal/registry/catalog.go's SchemaCatalog falls through to
-// RuntimeCatalog when EmbeddedServicesTyped() is empty), and runIsolated
-// additionally disables the remote overlay fetch and points the cache dir at
+// RuntimeCatalog when EmbeddedServicesTyped() is empty), and run()'s isolated
+// environment disables the remote overlay fetch and points the cache dir at
 // an empty tmp dir, so cmd/schema/schema.go's runSchema sees
 // catalog.Services() == 0 unconditionally -- the exact "offline with a cold
 // cache, remote meta off" branch documented at cmd/schema/schema.go:96-101.
@@ -184,7 +141,7 @@ func TestDegradeStubMetadataSchema(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := runIsolated(t, bin, tc.args...)
+			res := run(t, bin, tc.args...)
 			t.Logf("exit=%d stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
 			if res.exit != 2 {
 				t.Fatalf("exit=%d want 2 (graceful validation exit); stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)

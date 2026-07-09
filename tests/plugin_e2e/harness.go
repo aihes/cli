@@ -148,17 +148,40 @@ type result struct {
 	exit   int
 }
 
-// run executes the fork binary with args and captures stdout/stderr/exit.
-// Notifier env vars are suppressed to keep envelopes clean.
+// run executes the fork binary with args in an isolated, offline environment and
+// captures stdout/stderr/exit. Each call gets a fresh empty
+// LARKSUITE_CLI_CONFIG_DIR and LARKSUITE_CLI_REMOTE_META=off, so the fork never
+// inherits the host's ~/.lark-cli cache or makes a startup metadata fetch to the
+// open platform. That reproduces the bare-module customer state (no embedded
+// metadata, cold cache) deterministically on any machine, including CI: without
+// it, whether a command's assertion is reached depends on whether a live network
+// fetch happened to succeed. Tests that need runtime metadata seed it explicitly
+// via runWithSeededCatalog.
 func run(t *testing.T, bin string, args ...string) result {
+	t.Helper()
+	return runWithEnv(t, bin, isolatedEnv(t), args...)
+}
+
+// isolatedEnv is the bare-module, offline environment shared by run() and (as a
+// base) by runWithSeededCatalog.
+func isolatedEnv(t *testing.T) []string {
+	t.Helper()
+	return append(os.Environ(),
+		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
+		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
+		"LARKSUITE_CLI_CONFIG_DIR="+t.TempDir(),
+		"LARKSUITE_CLI_REMOTE_META=off",
+	)
+}
+
+// runWithEnv runs bin as a subprocess with the given full environment, capturing
+// stdout/stderr/exit.
+func runWithEnv(t *testing.T, bin string, env []string, args ...string) result {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, bin, args...)
-	c.Env = append(os.Environ(),
-		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
-		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
-	)
+	c.Env = env
 	var stdout, stderr strings.Builder
 	c.Stdout = &stdout
 	c.Stderr = &stderr
