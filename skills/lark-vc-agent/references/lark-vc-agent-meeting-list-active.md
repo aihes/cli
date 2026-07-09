@@ -4,6 +4,21 @@
 
 本 skill 对应 shortcut：`lark-cli vc +meeting-list-active`（调用 `GET /open-apis/vc/v1/bots/user_active_meeting`）。
 
+## 权限建议
+
+本命令当前按身份声明不同权限：
+
+| 场景 | 推荐权限 |
+|------|----------|
+| UAT / 用户身份 `--as user` | `vc:meeting.meetingevent:read` |
+| TAT / 应用身份 `--as bot` | `vc:meeting.bot.join:write` |
+
+注意：
+
+- TAT 这里的 `vc:meeting.bot.join:write` 是窄版 CLI 权限点位支持，不表示服务端已经把 active meeting 可见性变成纯读无数据范围风险模型。
+- 应用身份依然只返回“目标用户在会中且应用机器人也在会中”的会议；如果机器人没进会、数据范围没放开、应用没安装，结果仍可能为空。
+- 如果只是查询当前登录用户自己正在参加的会议，优先用用户身份和 `vc:meeting.meetingevent:read`。
+
 ## 命令
 
 ```bash

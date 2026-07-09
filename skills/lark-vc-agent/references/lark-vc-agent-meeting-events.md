@@ -11,6 +11,21 @@
 - `meeting_id` 来自 `+meeting-list-active --as bot --user-id <user_open_id>` 或 `+meeting-join --as bot`：后续读取事件继续 `--as bot`。
 - 应用身份下，应用机器人必须在该会中或参会过；应用身份 active meeting 返回的是“目标用户在会中且应用机器人也在会中”的会议，不表示可以读取任意 `meeting_id`。
 
+## 权限建议
+
+本命令当前按身份声明不同权限：
+
+| 场景 | 推荐权限 |
+|------|----------|
+| UAT / 用户身份 `--as user` | `vc:meeting.meetingevent:read` |
+| TAT / 应用身份 `--as bot` | `vc:meeting.bot.join:write` |
+
+注意：
+
+- 这里的 TAT 建议只说明 CLI 当前为应用身份声明了 `vc:meeting.bot.join:write` 这条窄版权限路径，不代表服务端已经把会中事件读取降成“无数据范围风险”的纯读点位。
+- 应用身份是否能真正读到事件，仍取决于应用机器人是否在会中或曾在会中、租户安装、权限可访问的数据范围，以及后端对该会议的可见性判断。
+- 如果你的目标是最小化读权限，优先使用用户身份并开通 `vc:meeting.meetingevent:read`。
+
 ## 命令
 
 ```bash

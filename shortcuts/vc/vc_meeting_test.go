@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -608,9 +609,21 @@ func TestMeetingListActive_DryRun_UserIdentity(t *testing.T) {
 	}
 }
 
-func TestMeetingListActive_ScopeMatchesEventReadPermission(t *testing.T) {
-	if len(VCMeetingListActive.Scopes) != 1 || VCMeetingListActive.Scopes[0] != "vc:meeting.meetingevent:read" {
-		t.Fatalf("scopes = %#v, want [vc:meeting.meetingevent:read]", VCMeetingListActive.Scopes)
+func TestMeetingListActive_ScopesMatchIdentityPermissions(t *testing.T) {
+	userScopes := []string{"vc:meeting.meetingevent:read"}
+	botScopes := []string{"vc:meeting.bot.join:write"}
+
+	if got := VCMeetingListActive.ScopesForIdentity("user"); !reflect.DeepEqual(got, userScopes) {
+		t.Fatalf("ScopesForIdentity(user) = %v, want %v", got, userScopes)
+	}
+	if got := VCMeetingListActive.ScopesForIdentity("bot"); !reflect.DeepEqual(got, botScopes) {
+		t.Fatalf("ScopesForIdentity(bot) = %v, want %v", got, botScopes)
+	}
+	if got := VCMeetingListActive.DeclaredScopesForIdentity("user"); !reflect.DeepEqual(got, userScopes) {
+		t.Fatalf("DeclaredScopesForIdentity(user) = %v, want %v", got, userScopes)
+	}
+	if got := VCMeetingListActive.DeclaredScopesForIdentity("bot"); !reflect.DeepEqual(got, botScopes) {
+		t.Fatalf("DeclaredScopesForIdentity(bot) = %v, want %v", got, botScopes)
 	}
 }
 
