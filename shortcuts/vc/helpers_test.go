@@ -47,6 +47,9 @@ func assertMeetingQueryPermissionError(t *testing.T, err error, identity core.Id
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected *errs.PermissionError, got %T: %v", err, err)
 	}
+	if pe.Category != errs.CategoryAuthorization {
+		t.Fatalf("Category = %q, want %q", pe.Category, errs.CategoryAuthorization)
+	}
 	if pe.Subtype != errs.SubtypeMissingScope {
 		t.Fatalf("Subtype = %q, want %q", pe.Subtype, errs.SubtypeMissingScope)
 	}
