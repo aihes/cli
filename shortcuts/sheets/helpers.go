@@ -59,22 +59,22 @@ func sheetsInputStatError(flag string, err error) error {
 const (
 	sheetImageParentType      = "sheet_image"
 	officeSheetFileParentType = "office_sheet_file"
-	fakeOfficeTokenPrefix     = "fake_office_"
-	localOfficeTokenPrefix    = "local_office_"
+	fakeOfficePrefix          = "fake_office_"
+	localOfficePrefix         = "local_office_"
 )
 
-// officeTokenPrefixes are the synthetic token prefixes an imported "office"
+// officePrefixes are the synthetic token prefixes an imported "office"
 // spreadsheet may carry. The prefix is being renamed from "fake_office_" to
 // "local_office_"; accept either so image uploads keep working across the
 // rename.
-var officeTokenPrefixes = []string{fakeOfficeTokenPrefix, localOfficeTokenPrefix}
+var officePrefixes = []string{fakeOfficePrefix, localOfficePrefix}
 
 // sheetMediaParentType returns the drive media parent_type to use when
 // uploading an image whose parent_node is spreadsheetToken. It is the single
 // place that maps a spreadsheet token to its parent_type so every image-upload
 // entry point (and its dry-run preview) stays consistent.
 func sheetMediaParentType(spreadsheetToken string) string {
-	for _, prefix := range officeTokenPrefixes {
+	for _, prefix := range officePrefixes {
 		if strings.HasPrefix(spreadsheetToken, prefix) {
 			return officeSheetFileParentType
 		}

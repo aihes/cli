@@ -37,9 +37,9 @@ func TestSheetMediaParentType(t *testing.T) {
 		{"native spreadsheet token", "shtcnABC123", sheetImageParentType},
 		{"empty token", "", sheetImageParentType},
 		{"fake_office imported token", "fake_office_abc123", officeSheetFileParentType},
-		{"fake_office token, only the prefix", fakeOfficeTokenPrefix, officeSheetFileParentType},
+		{"fake_office token, only the prefix", fakeOfficePrefix, officeSheetFileParentType},
 		{"local_office imported token", "local_office_abc123", officeSheetFileParentType},
-		{"local_office token, only the prefix", localOfficeTokenPrefix, officeSheetFileParentType},
+		{"local_office token, only the prefix", localOfficePrefix, officeSheetFileParentType},
 		{"fake_office prefix mid-string is not matched", "shtfake_office_abc", sheetImageParentType},
 		{"local_office prefix mid-string is not matched", "shtlocal_office_abc", sheetImageParentType},
 	}
