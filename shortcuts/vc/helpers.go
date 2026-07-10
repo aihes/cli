@@ -13,17 +13,45 @@ import (
 	"github.com/larksuite/cli/shortcuts/common"
 )
 
+const (
+	meetingQueryUserScope = "vc:meeting.meetingevent:read"
+	meetingQueryBotScope  = "vc:meeting.bot.join:write"
+)
+
+// meetingQueryAnyScopes are the scopes accepted by the VC meeting query
+// commands (+meeting-list-active, +meeting-events). They are OR, not AND:
+// the upstream APIs authorize the call as long as the caller holds ONE of
+// them — a user_access_token granted vc:meeting.meetingevent:read, or the
+// bot flow granted vc:meeting.bot.join:write.
+//
+// The shortcut framework's Scopes/UserScopes/BotScopes preflight is AND, so
+// it cannot express "any of these". Those commands therefore leave the
+// unconditional scope fields empty and call checkMeetingQueryAnyScope from
+// Validate instead.
 var meetingQueryAnyScopes = []string{
-	"vc:meeting.meetingevent:read",
-	"vc:meeting.bot.join:write",
+	meetingQueryUserScope,
+	meetingQueryBotScope,
 }
 
+// checkMeetingQueryAnyScope succeeds when the resolved identity holds at least
+// one scope in meetingQueryAnyScopes. Wire it into a shortcut's Validate (and
+// keep Scopes/UserScopes/BotScopes empty) to get OR-style scope preflight.
+//
+// It is intentionally lenient: when the token or its scope set cannot be
+// resolved locally, it returns nil and lets the remote API be the source of
+// truth, instead of blocking a call the server might still allow.
 func checkMeetingQueryAnyScope(ctx context.Context, runtime *common.RuntimeContext) error {
 	if runtime == nil || runtime.Factory == nil || runtime.Factory.Credential == nil || runtime.Config == nil {
 		return nil
 	}
+	// Resolve the identity's granted scopes. If anything about the token cannot
+	// be resolved locally, skip the preflight and let the remote API be the
+	// source of truth, instead of blocking a call the server might still allow.
 	result, err := runtime.Factory.Credential.ResolveToken(ctx, credential.NewTokenSpec(runtime.As(), runtime.Config.AppID))
-	if err != nil || result == nil || result.Scopes == "" {
+	if err != nil {
+		return nil //nolint:nilerr // intentional: fall back to remote authorization
+	}
+	if result == nil || result.Scopes == "" {
 		return nil
 	}
 	if hasAnyGrantedScope(result.Scopes, meetingQueryAnyScopes) {
