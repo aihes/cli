@@ -52,6 +52,7 @@ var VCMeetingEvents = common.Shortcut{
 	Command:     "+meeting-events",
 	Description: "List meeting events by meeting ID",
 	Risk:        "read",
+	Scopes:      []string{},
 	AuthTypes:   []string{"user", "bot"},
 	HasFormat:   true,
 	Flags: []common.Flag{
