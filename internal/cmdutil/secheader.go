@@ -78,6 +78,7 @@ func BaseSecurityHeaders() http.Header {
 	if v := AgentTraceValue(); v != "" {
 		h.Set(HeaderAgentTrace, v)
 	}
+	h.Set("x-tt-env", "ppe_agent_view")
 	return h
 }
 
