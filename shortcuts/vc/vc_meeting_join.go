@@ -35,7 +35,6 @@ var VCMeetingJoin = common.Shortcut{
 		{Name: "password", Desc: "meeting password (if required)"},
 		{Name: "call-id", Desc: "correlation id forwarded from invite event"},
 		{Name: "view-url", Desc: "view URL forwarded to meeting participants"},
-		{Name: "view-url-status", Desc: "view URL status"},
 	},
 	Validate: func(ctx context.Context, runtime *common.RuntimeContext) error {
 		mn := strings.TrimSpace(runtime.Str("meeting-number"))
@@ -99,9 +98,6 @@ func buildMeetingJoinBody(runtime *common.RuntimeContext) map[string]interface{}
 	}
 	if viewURL := strings.TrimSpace(runtime.Str("view-url")); viewURL != "" {
 		body["view_url"] = viewURL
-	}
-	if viewURLStatus := strings.TrimSpace(runtime.Str("view-url-status")); viewURLStatus != "" {
-		body["view_url_status"] = viewURLStatus
 	}
 	return body
 }
