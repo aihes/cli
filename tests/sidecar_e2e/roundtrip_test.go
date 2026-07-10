@@ -79,15 +79,16 @@ const (
 	// it keeps the request marker below in sync with the command invocation.
 	testDocToken = "nonexistent"
 
-	// docsReqMarker identifies the TARGET docs +fetch request among every
-	// request the fork routes through the proxy. `docs +fetch --as user`
+	// docsReqPath is the exact path of the TARGET docs +fetch request among
+	// every request the fork routes through the proxy. `docs +fetch --as user`
 	// resolves a sentinel UAT, and the credential layer then verifies it with
 	// a mandatory /open-apis/authen/v1/user_info probe (see
 	// internal/credential/credential_provider.go enrichUserInfo) — so a second
 	// request also flows through the sidecar. Asserting on whichever arrived
 	// last would let that identity probe masquerade as the docs request; we
-	// filter for the docs call explicitly instead.
-	docsReqMarker = "/documents/" + testDocToken + "/fetch"
+	// select the docs call by its full path (exact match, not a substring — a
+	// wrong API prefix or version must not slip through).
+	docsReqPath = "/open-apis/docs_ai/v1/documents/" + testDocToken + "/fetch"
 
 	// wantProxyTargetHost is the real Feishu open-platform host the interceptor
 	// must name as the proxy target for BRAND=feishu. The request is never
@@ -175,12 +176,12 @@ func (s *requestSink) all() []*capturedRequest {
 	return append([]*capturedRequest(nil), s.reqs...)
 }
 
-// find returns the first captured request whose path contains sub, or nil.
-func (s *requestSink) find(sub string) *capturedRequest {
+// find returns the first captured request whose path equals path, or nil.
+func (s *requestSink) find(path string) *capturedRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.reqs {
-		if strings.Contains(r.path, sub) {
+		if r.path == path {
 			return r
 		}
 	}
@@ -373,12 +374,12 @@ func (s *inTestSidecar) seenAll() []sidecarSeen {
 	return append([]sidecarSeen(nil), s.seen...)
 }
 
-// findSeen returns the first received request whose path contains sub, or nil.
-func (s *inTestSidecar) findSeen(sub string) *sidecarSeen {
+// findSeen returns the first received request whose path equals path, or nil.
+func (s *inTestSidecar) findSeen(path string) *sidecarSeen {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.seen {
-		if strings.Contains(s.seen[i].req.path, sub) {
+		if s.seen[i].req.path == path {
 			return &s.seen[i]
 		}
 	}
@@ -541,10 +542,10 @@ func assertForkSucceeded(t *testing.T, res forkResult) {
 // verified against the shared key.
 func assertInterceptorSigned(t *testing.T, sc *inTestSidecar) {
 	t.Helper()
-	seen := sc.findSeen(docsReqMarker)
+	seen := sc.findSeen(docsReqPath)
 	if seen == nil {
-		t.Fatalf("sidecar never received the docs request (marker %q) — interceptor did not route it to AUTH_PROXY; saw %v",
-			docsReqMarker, sidecarPaths(sc.seenAll()))
+		t.Fatalf("sidecar never received the docs request (path %q) — interceptor did not route it to AUTH_PROXY; saw %v",
+			docsReqPath, sidecarPaths(sc.seenAll()))
 	}
 	got := seen.req
 	if !seen.verifyRan {
@@ -598,10 +599,10 @@ func assertInterceptorSigned(t *testing.T, sc *inTestSidecar) {
 // synthetic token, never a sentinel or a real one — proving injection happened.
 func assertInjectedTokenReachedUpstream(t *testing.T, up *mockUpstream) {
 	t.Helper()
-	got := up.sink.find(docsReqMarker)
+	got := up.sink.find(docsReqPath)
 	if got == nil {
-		t.Fatalf("mock upstream never received the forwarded docs request (marker %q) — sidecar did not forward it after verification; saw %v",
-			docsReqMarker, requestPaths(up.sink.all()))
+		t.Fatalf("mock upstream never received the forwarded docs request (path %q) — sidecar did not forward it after verification; saw %v",
+			docsReqPath, requestPaths(up.sink.all()))
 	}
 	t.Logf("sidecar->mock docs headers: %v", got.headers)
 
@@ -614,6 +615,18 @@ func assertInjectedTokenReachedUpstream(t *testing.T, up *mockUpstream) {
 	// proving the only token that ever reached "upstream" was the injected one.
 	if gotAuth == "Bearer "+sidecar.SentinelUAT || gotAuth == "Bearer "+sidecar.SentinelTAT {
 		t.Fatalf("mock upstream received a sentinel token instead of the injected one: %q", gotAuth)
+	}
+	// The sidecar wire-protocol headers are between fork and sidecar only —
+	// the forward must strip every one of them. Token injection alone passing
+	// would still be a leak if signatures/timestamps/digests reached upstream.
+	for _, h := range []string{
+		sidecar.HeaderProxyVersion, sidecar.HeaderProxyTarget, sidecar.HeaderProxyIdentity,
+		sidecar.HeaderProxySignature, sidecar.HeaderProxyTimestamp, sidecar.HeaderBodySHA256,
+		sidecar.HeaderProxyAuthHeader,
+	} {
+		if v := got.headers.Get(h); v != "" {
+			t.Errorf("proxy protocol header %s leaked to upstream (want stripped): %q", h, v)
+		}
 	}
 }
 
