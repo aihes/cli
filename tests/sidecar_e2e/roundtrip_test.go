@@ -50,6 +50,8 @@ package sidecar_e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +73,28 @@ const (
 	testProxyKey  = "test-proxy-key-not-a-real-secret-000000000000"
 	testAppID     = "cli_test_app_not_real"
 	injectedToken = "fake-injected-token-not-real"
+
+	// testDocToken is the --doc argument runFork passes; the docs +fetch call
+	// becomes POST /open-apis/docs_ai/v1/documents/<testDocToken>/fetch. Sharing
+	// it keeps the request marker below in sync with the command invocation.
+	testDocToken = "nonexistent"
+
+	// docsReqMarker identifies the TARGET docs +fetch request among every
+	// request the fork routes through the proxy. `docs +fetch --as user`
+	// resolves a sentinel UAT, and the credential layer then verifies it with
+	// a mandatory /open-apis/authen/v1/user_info probe (see
+	// internal/credential/credential_provider.go enrichUserInfo) — so a second
+	// request also flows through the sidecar. Asserting on whichever arrived
+	// last would let that identity probe masquerade as the docs request; we
+	// filter for the docs call explicitly instead.
+	docsReqMarker = "/documents/" + testDocToken + "/fetch"
+
+	// wantProxyTargetHost is the real Feishu open-platform host the interceptor
+	// must name as the proxy target for BRAND=feishu. The request is never
+	// actually forwarded there (the in-test sidecar redirects to the mock); the
+	// header only records where the fork BELIEVED it was going, and it is HMAC
+	// signing input, so it must be exactly the real host.
+	wantProxyTargetHost = "open.feishu.cn"
 )
 
 // TestSidecarHMACRoundTrip drives the whole wire protocol as three named
@@ -85,9 +109,27 @@ func TestSidecarHMACRoundTrip(t *testing.T) {
 	// One real external process: lark-cli built with -tags authsidecar, run
 	// fully offline against the in-test sidecar.
 	bin := buildAuthsidecarFork(t)
-	runFork(t, bin, sc.URL)
+	res := runFork(t, bin, sc.URL)
 
-	// Assert the three properties of a correct round trip.
+	// Diagnostic dump (shown only on failure or -v): the full request set, so a
+	// failure makes plain which requests flowed and which one the assertions
+	// targeted, instead of guessing about the last-arriving request.
+	for _, s := range sc.seenAll() {
+		t.Logf("sidecar saw: %s %s target=%q identity=%q verifyRan=%v verifyErr=%v",
+			s.req.method, s.req.path, s.req.headers.Get(sidecar.HeaderProxyTarget),
+			s.req.headers.Get(sidecar.HeaderProxyIdentity), s.verifyRan, s.verifyErr)
+	}
+	for _, r := range upstream.sink.all() {
+		t.Logf("upstream saw: %s %s auth=%q", r.method, r.path, r.headers.Get("Authorization"))
+	}
+	t.Logf("fork exit=%d\nstdout=%s\nstderr=%s", res.exit, res.stdout, res.stderr)
+
+	// Assert the fork's command itself succeeded end-to-end, not just that some
+	// bytes reached the sidecar.
+	assertForkSucceeded(t, res)
+
+	// Assert the three properties of a correct round trip, scoped to the DOCS
+	// request (not an auxiliary identity probe).
 	assertInterceptorSigned(t, sc)                  // (a)+(c) fork -> sidecar
 	assertInjectedTokenReachedUpstream(t, upstream) // (b)     sidecar -> upstream
 }
@@ -104,29 +146,45 @@ type capturedRequest struct {
 	body    []byte
 }
 
-// requestSink stores the request a stub server saw, guarded so the httptest
-// handler goroutine and the test goroutine can hand it over safely.
+// requestSink stores EVERY request a stub server saw, in arrival order,
+// guarded so the httptest handler goroutine and the test goroutine can hand
+// them over safely. Capturing all requests (not just the last) is what closes
+// the false-green window: the fork may route more than one request through the
+// proxy, and the target docs request is not guaranteed to be the last.
 type requestSink struct {
-	mu  sync.Mutex
-	req *capturedRequest
+	mu   sync.Mutex
+	reqs []*capturedRequest
 }
 
-func (s *requestSink) capture(r *http.Request, body []byte) {
-	snap := capturedRequest{
+func (s *requestSink) capture(r *http.Request, body []byte) *capturedRequest {
+	snap := &capturedRequest{
 		method:  r.Method,
 		path:    r.URL.RequestURI(),
 		headers: r.Header.Clone(),
 		body:    body,
 	}
 	s.mu.Lock()
-	s.req = &snap
+	s.reqs = append(s.reqs, snap)
 	s.mu.Unlock()
+	return snap
 }
 
-func (s *requestSink) get() *capturedRequest {
+func (s *requestSink) all() []*capturedRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.req
+	return append([]*capturedRequest(nil), s.reqs...)
+}
+
+// find returns the first captured request whose path contains sub, or nil.
+func (s *requestSink) find(sub string) *capturedRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.reqs {
+		if strings.Contains(r.path, sub) {
+			return r
+		}
+	}
+	return nil
 }
 
 // --- mock upstream (stands in for open.feishu.cn) --------------------------
@@ -144,23 +202,44 @@ func startMockUpstream(t *testing.T) *mockUpstream {
 		m.sink.capture(r, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"code":0,"msg":"success","data":{"document":{"content":"mock content"}}}`))
+		// Respond per path so each forwarded request parses as success: the
+		// identity probe needs authen/v1/user_info's {data:{open_id,name}} to
+		// resolve cleanly; the docs +fetch is satisfied by the generic code:0
+		// envelope. A single canned body would make the identity probe error.
+		_, _ = w.Write(mockResponseFor(r.URL.Path))
 	}))
 	t.Cleanup(m.Close)
 	return m
 }
 
+// mockResponseFor returns a minimal success body matching the API the given
+// path addresses. Unknown paths get a generic code:0 envelope.
+func mockResponseFor(path string) []byte {
+	if strings.Contains(path, "/authen/v1/user_info") {
+		return []byte(`{"code":0,"msg":"success","data":{"open_id":"ou_mock","name":"mock user"}}`)
+	}
+	return []byte(`{"code":0,"msg":"success","data":{}}`)
+}
+
 // --- in-test sidecar (mirrors server-demo/handler.go verify+inject) --------
+
+// sidecarSeen is one request the in-test sidecar received, together with the
+// per-request verification outcome. Tracking this per request (not as a single
+// last-write-wins field) lets assertions check the verification that belongs
+// to the DOCS request specifically.
+type sidecarSeen struct {
+	req       *capturedRequest
+	verifyRan bool
+	verifyErr error
+}
 
 type inTestSidecar struct {
 	*httptest.Server
 	key         []byte
 	upstreamURL string
-	sink        requestSink
 
-	mu        sync.Mutex // guards verifyRan/verifyErr
-	verifyRan bool
-	verifyErr error
+	mu   sync.Mutex // guards seen
+	seen []sidecarSeen
 }
 
 func startInTestSidecar(t *testing.T, key []byte, upstreamURL string) *inTestSidecar {
@@ -174,9 +253,17 @@ func startInTestSidecar(t *testing.T, key []byte, upstreamURL string) *inTestSid
 // handle is the request flow: capture -> verify (steps 0-4) -> inject+forward.
 func (s *inTestSidecar) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
-	s.sink.capture(r, body)
+	snap := &capturedRequest{
+		method:  r.Method,
+		path:    r.URL.RequestURI(),
+		headers: r.Header.Clone(),
+		body:    body,
+	}
 
-	authHeader, ok := s.verifyProxyRequest(w, r, body)
+	authHeader, verifyRan, verifyErr, ok := s.verifyProxyRequest(w, r, body)
+	s.mu.Lock()
+	s.seen = append(s.seen, sidecarSeen{req: snap, verifyRan: verifyRan, verifyErr: verifyErr})
+	s.mu.Unlock()
 	if !ok {
 		return
 	}
@@ -185,15 +272,15 @@ func (s *inTestSidecar) handle(w http.ResponseWriter, r *http.Request) {
 
 // verifyProxyRequest mirrors server-demo/handler.go steps 0-4: protocol
 // version, body SHA256, target validation, and HMAC signature verification.
-// It records whether verification ran and its result (for assertions) and
-// returns the auth header the client committed to. On any failure it writes
-// the HTTP error and returns ok=false.
-func (s *inTestSidecar) verifyProxyRequest(w http.ResponseWriter, r *http.Request, body []byte) (authHeader string, ok bool) {
+// It returns the auth header the client committed to, whether verification
+// (step 4) actually ran, and its result. On any pre-step-4 failure it writes
+// the HTTP error and returns ok=false with verifyRan=false.
+func (s *inTestSidecar) verifyProxyRequest(w http.ResponseWriter, r *http.Request, body []byte) (authHeader string, verifyRan bool, verifyErr error, ok bool) {
 	// Step 0: protocol version.
 	version := r.Header.Get(sidecar.HeaderProxyVersion)
 	if version != sidecar.ProtocolV1 {
 		http.Error(w, "unsupported "+sidecar.HeaderProxyVersion+": "+version, http.StatusBadRequest)
-		return "", false
+		return "", false, nil, false
 	}
 
 	// Step 1-2: timestamp + body SHA256.
@@ -201,14 +288,16 @@ func (s *inTestSidecar) verifyProxyRequest(w http.ResponseWriter, r *http.Reques
 	claimedSHA := r.Header.Get(sidecar.HeaderBodySHA256)
 	if claimedSHA == "" || claimedSHA != sidecar.BodySHA256(body) {
 		http.Error(w, "body SHA256 mismatch", http.StatusBadRequest)
-		return "", false
+		return "", false, nil, false
 	}
 
 	// Step 3: target host, identity, auth-header (all covered by the sig).
 	targetHost, perr := parseTargetHost(r.Header.Get(sidecar.HeaderProxyTarget))
 	if perr != nil {
 		http.Error(w, "invalid "+sidecar.HeaderProxyTarget+": "+perr.Error(), http.StatusForbidden)
-		return "", false
+		// verifyRan=false: step 4 never ran; surface the parse error so the
+		// diagnostic dump shows why this request was rejected early.
+		return "", false, perr, false
 	}
 	identity := r.Header.Get(sidecar.HeaderProxyIdentity)
 	authHeader = r.Header.Get(sidecar.HeaderProxyAuthHeader)
@@ -224,15 +313,11 @@ func (s *inTestSidecar) verifyProxyRequest(w http.ResponseWriter, r *http.Reques
 		Identity:     identity,
 		AuthHeader:   authHeader,
 	}, r.Header.Get(sidecar.HeaderProxySignature))
-	s.mu.Lock()
-	s.verifyRan = true
-	s.verifyErr = err
-	s.mu.Unlock()
 	if err != nil {
 		http.Error(w, "HMAC verification failed: "+err.Error(), http.StatusUnauthorized)
-		return "", false
+		return "", true, err, false
 	}
-	return authHeader, true
+	return authHeader, true, nil, true
 }
 
 // forwardWithInjectedToken mirrors server-demo's inject+forward. Unlike
@@ -281,11 +366,23 @@ func (s *inTestSidecar) forwardWithInjectedToken(w http.ResponseWriter, r *http.
 	_, _ = w.Write(respBody)
 }
 
-// verifyResult reports whether step 4 ran and, if so, its error.
-func (s *inTestSidecar) verifyResult() (ran bool, err error) {
+// seenAll returns a copy of every request the sidecar received, in order.
+func (s *inTestSidecar) seenAll() []sidecarSeen {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.verifyRan, s.verifyErr
+	return append([]sidecarSeen(nil), s.seen...)
+}
+
+// findSeen returns the first received request whose path contains sub, or nil.
+func (s *inTestSidecar) findSeen(sub string) *sidecarSeen {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.seen {
+		if strings.Contains(s.seen[i].req.path, sub) {
+			return &s.seen[i]
+		}
+	}
+	return nil
 }
 
 // isProxyHeader reports whether name is one of the sidecar wire-protocol
@@ -352,10 +449,21 @@ func buildAuthsidecarFork(t *testing.T) string {
 	return bin
 }
 
-// runFork runs the fork against the in-test sidecar, fully offline. The fork's
-// exit status is logged but NOT asserted — this test judges wire behavior
-// (what reached the sidecar/upstream), not the command's own success.
-func runFork(t *testing.T, binPath, sidecarURL string) {
+// forkResult is the fork subprocess outcome.
+type forkResult struct {
+	exit   int
+	stdout string
+	stderr string
+}
+
+// runFork runs the fork against the in-test sidecar, fully offline, and returns
+// its exit code and captured output. LARKSUITE_CLI_REMOTE_META=off is essential:
+// without it the fork's startup metadata refresh hits the real
+// open.feishu.cn/api/tools/open/api_definition (internal/registry/remote.go),
+// which both breaks the "offline, secret-free" contract and makes the run
+// depend on live network. With it set, the command still completes and the
+// docs request still flows through the sidecar, but nothing leaves the machine.
+func runFork(t *testing.T, binPath, sidecarURL string) forkResult {
 	t.Helper()
 	scURL, err := url.Parse(sidecarURL)
 	if err != nil {
@@ -364,13 +472,14 @@ func runFork(t *testing.T, binPath, sidecarURL string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binPath, "docs", "+fetch", "--doc", "nonexistent", "--as", "user")
+	cmd := exec.CommandContext(ctx, binPath, "docs", "+fetch", "--doc", testDocToken, "--as", "user")
 	cmd.Env = append(os.Environ(),
 		"LARKSUITE_CLI_AUTH_PROXY=http://"+scURL.Host,
 		"LARKSUITE_CLI_PROXY_KEY="+testProxyKey,
 		"LARKSUITE_CLI_APP_ID="+testAppID,
 		"LARKSUITE_CLI_BRAND=feishu",
 		"LARKSUITE_CLI_CONFIG_DIR="+t.TempDir(),
+		"LARKSUITE_CLI_REMOTE_META=off",
 		"LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1",
 		"LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1",
 	)
@@ -378,9 +487,16 @@ func runFork(t *testing.T, binPath, sidecarURL string) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
-	t.Logf("fork exit error (informational only, not asserted): %v", runErr)
-	t.Logf("fork stdout: %s", stdout.String())
-	t.Logf("fork stderr: %s", stderr.String())
+	exit := 0
+	if runErr != nil {
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			exit = ee.ExitCode()
+		} else {
+			t.Fatalf("run fork: %v", runErr)
+		}
+	}
+	return forkResult{exit: exit, stdout: stdout.String(), stderr: stderr.String()}
 }
 
 // repoRoot resolves the lark-cli module root from the test's working
@@ -396,24 +512,59 @@ func repoRoot(t *testing.T) string {
 
 // --- assertions ------------------------------------------------------------
 
-// assertInterceptorSigned checks the fork -> sidecar hop (assertions a + c):
-// the real interceptor ran (all proxy headers present, identity=user), stripped
-// every real/sentinel auth header before signing, and produced a signature that
+// assertForkSucceeded checks the fork command itself completed the round trip:
+// exit 0 and an ok:true JSON envelope on stdout. This is what makes the docs
+// request a genuine success path, not merely bytes that happened to flow.
+func assertForkSucceeded(t *testing.T, res forkResult) {
+	t.Helper()
+	if res.exit != 0 {
+		t.Fatalf("fork exit=%d want 0; stdout=%s stderr=%s", res.exit, res.stdout, res.stderr)
+	}
+	// Parse rather than substring-match: the CLI pretty-prints stdout, so the
+	// envelope reads "ok": true (with a space), and the field's truth — not its
+	// serialized spelling — is what proves the round trip succeeded.
+	var env struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(res.stdout), &env); err != nil {
+		t.Fatalf("fork stdout is not a JSON envelope: %v; stdout=%s stderr=%s", err, res.stdout, res.stderr)
+	}
+	if !env.OK {
+		t.Fatalf("fork stdout ok != true (round trip did not succeed); stdout=%s stderr=%s", res.stdout, res.stderr)
+	}
+}
+
+// assertInterceptorSigned checks the fork -> sidecar hop (assertions a + c) for
+// the DOCS request specifically: the real interceptor ran (all proxy headers
+// present, identity=user, method+path+target as expected), stripped every
+// real/sentinel auth header before signing, and produced a signature that
 // verified against the shared key.
 func assertInterceptorSigned(t *testing.T, sc *inTestSidecar) {
 	t.Helper()
-	got := sc.sink.get()
-	if got == nil {
-		t.Fatal("sidecar never received a request from the fork — interceptor did not route to AUTH_PROXY")
+	seen := sc.findSeen(docsReqMarker)
+	if seen == nil {
+		t.Fatalf("sidecar never received the docs request (marker %q) — interceptor did not route it to AUTH_PROXY; saw %v",
+			docsReqMarker, sidecarPaths(sc.seenAll()))
 	}
-	ran, verifyErr := sc.verifyResult()
-	if !ran {
-		t.Fatal("sidecar received a request but never reached HMAC verification (rejected earlier — see handler headers)")
+	got := seen.req
+	if !seen.verifyRan {
+		t.Fatal("sidecar received the docs request but never reached HMAC verification (rejected earlier — see handler headers)")
 	}
-	if verifyErr != nil {
-		t.Fatalf("HMAC verification failed on the fork's own signed request: %v", verifyErr)
+	if seen.verifyErr != nil {
+		t.Fatalf("HMAC verification failed on the fork's own signed docs request: %v", seen.verifyErr)
 	}
-	t.Logf("fork->sidecar headers: %v", got.headers)
+	t.Logf("fork->sidecar docs headers: %v", got.headers)
+
+	// Target/method/path: prove we asserted on the real docs call to the real
+	// Feishu open platform, not an auxiliary request.
+	if got.method != http.MethodPost {
+		t.Errorf("docs request method = %q, want POST", got.method)
+	}
+	if targetHost, err := parseTargetHost(got.headers.Get(sidecar.HeaderProxyTarget)); err != nil {
+		t.Errorf("docs request %s invalid: %v", sidecar.HeaderProxyTarget, err)
+	} else if targetHost != wantProxyTargetHost {
+		t.Errorf("docs request proxy target host = %q, want %q", targetHost, wantProxyTargetHost)
+	}
 
 	// No real/sentinel auth ever left the fork: the interceptor strips the
 	// sentinel before signing, so this hop must carry no auth header at all.
@@ -443,15 +594,16 @@ func assertInterceptorSigned(t *testing.T, sc *inTestSidecar) {
 }
 
 // assertInjectedTokenReachedUpstream checks the sidecar -> upstream hop
-// (assertion b): the mock saw exactly the sidecar-injected synthetic token,
-// never a sentinel or a real one — proving injection actually happened.
+// (assertion b) for the DOCS request: the mock saw exactly the sidecar-injected
+// synthetic token, never a sentinel or a real one — proving injection happened.
 func assertInjectedTokenReachedUpstream(t *testing.T, up *mockUpstream) {
 	t.Helper()
-	got := up.sink.get()
+	got := up.sink.find(docsReqMarker)
 	if got == nil {
-		t.Fatal("mock upstream never received a forwarded request — sidecar did not forward after verification")
+		t.Fatalf("mock upstream never received the forwarded docs request (marker %q) — sidecar did not forward it after verification; saw %v",
+			docsReqMarker, requestPaths(up.sink.all()))
 	}
-	t.Logf("sidecar->mock headers: %v", got.headers)
+	t.Logf("sidecar->mock docs headers: %v", got.headers)
 
 	wantAuth := "Bearer " + injectedToken
 	gotAuth := got.headers.Get("Authorization")
@@ -463,4 +615,21 @@ func assertInjectedTokenReachedUpstream(t *testing.T, up *mockUpstream) {
 	if gotAuth == "Bearer "+sidecar.SentinelUAT || gotAuth == "Bearer "+sidecar.SentinelTAT {
 		t.Fatalf("mock upstream received a sentinel token instead of the injected one: %q", gotAuth)
 	}
+}
+
+// sidecarPaths / requestPaths render captured paths for failure messages.
+func sidecarPaths(seen []sidecarSeen) []string {
+	paths := make([]string, len(seen))
+	for i, s := range seen {
+		paths[i] = s.req.method + " " + s.req.path
+	}
+	return paths
+}
+
+func requestPaths(reqs []*capturedRequest) []string {
+	paths := make([]string, len(reqs))
+	for i, r := range reqs {
+		paths[i] = r.method + " " + r.path
+	}
+	return paths
 }
