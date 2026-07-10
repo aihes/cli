@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -609,21 +608,21 @@ func TestMeetingListActive_DryRun_UserIdentity(t *testing.T) {
 	}
 }
 
-func TestMeetingListActive_ScopesMatchIdentityPermissions(t *testing.T) {
-	userScopes := []string{"vc:meeting.meetingevent:read"}
-	botScopes := []string{"vc:meeting.bot.join:write"}
-
-	if got := VCMeetingListActive.ScopesForIdentity("user"); !reflect.DeepEqual(got, userScopes) {
-		t.Fatalf("ScopesForIdentity(user) = %v, want %v", got, userScopes)
+func TestMeetingListActive_UsesCustomAnyScopeCheck(t *testing.T) {
+	if got := VCMeetingListActive.ScopesForIdentity("user"); len(got) != 0 {
+		t.Fatalf("ScopesForIdentity(user) = %v, want no framework AND preflight scopes", got)
 	}
-	if got := VCMeetingListActive.ScopesForIdentity("bot"); !reflect.DeepEqual(got, botScopes) {
-		t.Fatalf("ScopesForIdentity(bot) = %v, want %v", got, botScopes)
+	if got := VCMeetingListActive.ScopesForIdentity("bot"); len(got) != 0 {
+		t.Fatalf("ScopesForIdentity(bot) = %v, want no framework AND preflight scopes", got)
 	}
-	if got := VCMeetingListActive.DeclaredScopesForIdentity("user"); !reflect.DeepEqual(got, userScopes) {
-		t.Fatalf("DeclaredScopesForIdentity(user) = %v, want %v", got, userScopes)
+	if !hasAnyGrantedScope("vc:meeting.meetingevent:read", meetingQueryAnyScopes) {
+		t.Fatal("meetingevent scope should satisfy meeting query OR scope check")
 	}
-	if got := VCMeetingListActive.DeclaredScopesForIdentity("bot"); !reflect.DeepEqual(got, botScopes) {
-		t.Fatalf("DeclaredScopesForIdentity(bot) = %v, want %v", got, botScopes)
+	if !hasAnyGrantedScope("vc:meeting.bot.join:write", meetingQueryAnyScopes) {
+		t.Fatal("bot join scope should satisfy meeting query OR scope check")
+	}
+	if hasAnyGrantedScope("vc:meeting.message:write", meetingQueryAnyScopes) {
+		t.Fatal("unrelated vc scope should not satisfy meeting query OR scope check")
 	}
 }
 

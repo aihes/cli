@@ -23,15 +23,16 @@ var VCMeetingListActive = common.Shortcut{
 	Command:     "+meeting-list-active",
 	Description: "List active meetings for the current identity or target user",
 	Risk:        "read",
-	UserScopes:  []string{"vc:meeting.meetingevent:read"},
-	BotScopes:   []string{"vc:meeting.bot.join:write"},
 	AuthTypes:   []string{"user", "bot"},
 	HasFormat:   true,
 	Flags: []common.Flag{
 		{Name: "user-id", Desc: "target user ID when using bot identity"},
 	},
 	Validate: func(ctx context.Context, runtime *common.RuntimeContext) error {
-		return validateMeetingListActiveUserID(runtime)
+		if err := validateMeetingListActiveUserID(runtime); err != nil {
+			return err
+		}
+		return checkMeetingQueryAnyScope(ctx, runtime)
 	},
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
 		params, err := buildMeetingListActiveParams(runtime)

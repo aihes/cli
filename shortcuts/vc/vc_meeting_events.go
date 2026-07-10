@@ -52,8 +52,6 @@ var VCMeetingEvents = common.Shortcut{
 	Command:     "+meeting-events",
 	Description: "List meeting events by meeting ID",
 	Risk:        "read",
-	UserScopes:  []string{"vc:meeting.meetingevent:read"},
-	BotScopes:   []string{"vc:meeting.bot.join:write"},
 	AuthTypes:   []string{"user", "bot"},
 	HasFormat:   true,
 	Flags: []common.Flag{
@@ -74,7 +72,7 @@ var VCMeetingEvents = common.Shortcut{
 		if _, _, err := parseMeetingEventsTimeRange(runtime); err != nil {
 			return err
 		}
-		return nil
+		return checkMeetingQueryAnyScope(ctx, runtime)
 	},
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
 		startTime, endTime, err := parseMeetingEventsTimeRange(runtime)
