@@ -17,8 +17,10 @@ import (
 	"github.com/larksuite/cli/internal/auth"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
+	"github.com/larksuite/cli/internal/envvars"
 	"github.com/larksuite/cli/internal/i18n"
 	"github.com/larksuite/cli/internal/keychain"
+	"github.com/larksuite/cli/internal/keylesshelper"
 	"github.com/larksuite/cli/internal/keysigner"
 	"github.com/larksuite/cli/internal/output"
 )
@@ -103,6 +105,19 @@ func requestedInitAuthMethod(opts *ConfigInitOptions) string {
 		return core.AuthMethodPrivateKeyJWT
 	}
 	return core.AuthMethodClientSecret
+}
+
+func validateKeylessSignerEnvironment() error {
+	if !keylesshelper.ConfiguredFromEnvironment() {
+		return nil
+	}
+	if err := keylesshelper.ValidateConfigured(); err != nil {
+		return errs.NewConfigError(errs.SubtypeInvalidClient,
+			"invalid keyless signer command: %v", err).
+			WithCause(err).
+			WithHint("fix or unset %s before running config init", envvars.CliKeylessSignerCmd)
+	}
+	return nil
 }
 
 // printLangPreferenceConfirmation echoes the set preference to stderr, only
@@ -204,6 +219,11 @@ func saveAsOnlyApp(appId string, secret core.SecretInput, brand core.LarkBrand, 
 			AuthMethod: authMethod, KeyRef: keyRef,
 		}},
 	}
+	return saveMultiAppConfigForInit(config)
+}
+
+func saveMultiAppConfigForInit(config *core.MultiAppConfig) error {
+	config.KeylessSignerCmd = strings.TrimSpace(os.Getenv(envvars.CliKeylessSignerCmd))
 	return core.SaveMultiAppConfig(config)
 }
 
@@ -282,7 +302,7 @@ func saveAsProfile(existing *core.MultiAppConfig, kc keychain.KeychainAccess, pr
 			KeyRef:     keyRef,
 		})
 	}
-	return core.SaveMultiAppConfig(multi)
+	return saveMultiAppConfigForInit(multi)
 }
 
 func findProfileIndexByName(multi *core.MultiAppConfig, profileName string) int {
@@ -354,7 +374,7 @@ func updateExistingProfileWithoutSecret(existing *core.MultiAppConfig, profileNa
 	app.AppId = appID
 	app.Brand = brand
 	app.Lang = preferredLang(i18n.Lang(lang), app.Lang)
-	return core.SaveMultiAppConfig(existing)
+	return saveMultiAppConfigForInit(existing)
 }
 
 // persistAndProbeResult saves a registration/restore result into profileName and
@@ -447,6 +467,25 @@ func profileSuffix(profileName string) string {
 
 func configInitRun(opts *ConfigInitOptions) error {
 	f := opts.Factory
+	if opts.PrivateKeyJWT {
+		switch {
+		case opts.Restore:
+			return errs.NewValidationError(errs.SubtypeInvalidArgument,
+				"--private_key_jwt cannot be combined with --restore; restore preserves the stored auth method").
+				WithParam("--private_key_jwt")
+		case opts.AppID != "":
+			return errs.NewValidationError(errs.SubtypeInvalidArgument,
+				"--private_key_jwt cannot be combined with --app-id; use --new to register a private_key_jwt app").
+				WithParam("--private_key_jwt")
+		case opts.AppSecretStdin:
+			return errs.NewValidationError(errs.SubtypeInvalidArgument,
+				"--private_key_jwt cannot be combined with --app-secret-stdin; private_key_jwt does not use an app secret").
+				WithParam("--private_key_jwt")
+		}
+	}
+	if err := validateKeylessSignerEnvironment(); err != nil {
+		return err
+	}
 
 	// Read secret from stdin if --app-secret-stdin is set
 	if opts.AppSecretStdin {

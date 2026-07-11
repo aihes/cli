@@ -19,7 +19,6 @@ import (
 	"github.com/larksuite/cli/internal/build"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
-	"github.com/larksuite/cli/internal/envvars"
 	"github.com/larksuite/cli/internal/identitydiag"
 	"github.com/larksuite/cli/internal/keylesshelper"
 	"github.com/larksuite/cli/internal/keysigner"
@@ -161,13 +160,21 @@ const teeUnavailableHint = "ensure the device secure hardware is accessible (Lin
 // informational for client_secret apps.
 func teeSignerCheck(ctx context.Context, cfg *core.CliConfig) checkResult {
 	usesPKJWT := cfg != nil && cfg.AuthMethod == core.AuthMethodPrivateKeyJWT
-	if keylesshelper.Configured() {
+	helper, err := keylesshelper.Resolve()
+	if err != nil {
+		hint := fmt.Sprintf("fix the external keyless signer source, or re-run config init to replace/remove config.json keylessSignerCmd: %v", err)
+		if usesPKJWT {
+			return fail("tee_signer", "external keyless signer is misconfigured", hint)
+		}
+		return warn("tee_signer", "external keyless signer is misconfigured", hint)
+	}
+	if helper != nil {
 		keyLabel := ""
 		if cfg != nil {
 			keyLabel = cfg.KeyLabel
 		}
-		if err := keylesshelper.Probe(ctx, keyLabel); err != nil {
-			hint := fmt.Sprintf("fix %s: %v", envvars.CliKeylessSignerCmd, err)
+		if err := helper.Probe(ctx, keyLabel); err != nil {
+			hint := fmt.Sprintf("fix the configured external keyless signer, or re-run config init to replace/remove it: %v", err)
 			if usesPKJWT {
 				return fail("tee_signer", "external keyless signer is misconfigured", hint)
 			}

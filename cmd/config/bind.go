@@ -406,6 +406,12 @@ func priorLang(previousConfigBytes []byte) i18n.Lang {
 // usable.
 func commitBinding(opts *BindOptions, appConfig *core.AppConfig, previousConfigBytes []byte, source, configPath string) error {
 	multi := &core.MultiAppConfig{Apps: []core.AppConfig{*appConfig}}
+	if previousConfigBytes != nil {
+		var previous core.MultiAppConfig
+		if json.Unmarshal(previousConfigBytes, &previous) == nil {
+			multi.KeylessSignerCmd = previous.KeylessSignerCmd
+		}
+	}
 
 	if err := vfs.MkdirAll(core.GetConfigDir(), 0700); err != nil {
 		return errs.NewInternalError(errs.SubtypeFileIO, "failed to create workspace directory: %v", err).WithCause(err)
