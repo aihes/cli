@@ -47,10 +47,13 @@ jobs:
               throw new Error(`ambiguous workflow_run pull request bindings: ${runPRs.length}`);
             }
             let prNumber = Number(runPRs[0]?.number || 0);
-            let eventBaseSha = runPRs[0]?.base?.sha || "";
+            const eventBaseSha = runPRs[0]?.base?.sha || "";
             const eventHeadSha = runPRs[0]?.head?.sha || "";
-            const targetHeadSha = eventHeadSha || run.head_sha;
+            const targetHeadSha = run.head_sha;
             if (!/^[a-f0-9]{40}$/i.test(targetHeadSha)) throw new Error("invalid PR head sha");
+            if (eventHeadSha && eventHeadSha.toLowerCase() !== targetHeadSha.toLowerCase()) {
+              core.notice("PR quality summary using workflow_run head_sha because workflow_run pull request head differs from the CI run head");
+            }
 
             const factsArtifactPattern = /^quality-gate-facts-([a-f0-9]{40})-([a-f0-9]{40})$/i;
             const { data: artifactData } = await github.rest.actions.listWorkflowRunArtifacts({
@@ -71,11 +74,11 @@ jobs:
               if (artifactHeadSha.toLowerCase() !== targetHeadSha.toLowerCase()) {
                 artifactError = "facts artifact head sha does not match verified PR head sha";
                 factsArtifactName = "";
-              } else if (eventBaseSha && parsedBaseSha.toLowerCase() !== eventBaseSha.toLowerCase()) {
-                artifactError = "facts artifact base sha does not match workflow_run pull request base sha";
-                factsArtifactName = "";
               } else {
                 artifactBaseSha = parsedBaseSha;
+                if (eventBaseSha && parsedBaseSha.toLowerCase() !== eventBaseSha.toLowerCase()) {
+                  core.notice("PR quality summary using facts artifact base because workflow_run pull request base differs from the CI facts artifact base");
+                }
               }
             }
             if (!prNumber) {
@@ -85,31 +88,44 @@ jobs:
                 commit_sha: targetHeadSha,
               });
               const candidatePRs = associatedPRs.filter((candidate) =>
-                candidate.state === "open" &&
                 candidate.base?.repo?.id === context.payload.repository.id &&
                 candidate.head?.sha === targetHeadSha
               );
-              if (candidatePRs.length > 1) {
-                throw new Error(`ambiguous open PRs for workflow_run head ${targetHeadSha}: ${candidatePRs.length}`);
+              const openCandidatePRs = candidatePRs.filter((candidate) => candidate.state === "open");
+              if (openCandidatePRs.length > 1) {
+                throw new Error(`ambiguous open PRs for workflow_run head ${targetHeadSha}: ${openCandidatePRs.length}`);
               }
-              if (candidatePRs.length === 1) {
-                prNumber = candidatePRs[0].number;
+              if (openCandidatePRs.length === 1) {
+                prNumber = openCandidatePRs[0].number;
+              } else if (candidatePRs.length > 0) {
+                core.notice("PR quality summary skipped: workflow_run target PR is no longer open");
+                core.setOutput("stale", "true");
+                return;
               }
             }
             if (!prNumber) {
               const candidatePRs = await github.paginate(github.rest.pulls.list, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                state: "open",
+                state: "all",
                 per_page: 100,
               }).then((prs) => prs.filter((candidate) =>
                 candidate.base?.repo?.id === context.payload.repository.id &&
                 candidate.head?.sha === targetHeadSha
               ));
-              if (candidatePRs.length !== 1) {
+              const openCandidatePRs = candidatePRs.filter((candidate) => candidate.state === "open");
+              if (openCandidatePRs.length > 1) {
+                throw new Error(`ambiguous open PRs from pull list fallback for workflow_run head ${targetHeadSha}: ${openCandidatePRs.length}`);
+              }
+              if (openCandidatePRs.length === 1) {
+                prNumber = openCandidatePRs[0].number;
+              } else if (candidatePRs.length > 0) {
+                core.notice("PR quality summary skipped: workflow_run target PR is no longer open");
+                core.setOutput("stale", "true");
+                return;
+              } else {
                 throw new Error(`expected one open PR from pull list fallback for workflow_run head ${targetHeadSha}, got ${candidatePRs.length}`);
               }
-              prNumber = candidatePRs[0].number;
             }
             if (!Number.isInteger(prNumber) || prNumber <= 0) throw new Error("missing pull request binding");
             const { data: pr } = await github.rest.pulls.get({
@@ -118,12 +134,17 @@ jobs:
               pull_number: prNumber,
             });
             if (pr.base.repo.id !== context.payload.repository.id) throw new Error("PR base repo mismatch");
+            if (pr.state !== "open") {
+              core.notice("PR quality summary skipped: workflow_run target PR is no longer open");
+              core.setOutput("stale", "true");
+              return;
+            }
             if (pr.head.sha !== targetHeadSha) {
               core.notice("PR quality summary skipped: workflow_run is stale for this PR head");
               core.setOutput("stale", "true");
               return;
             }
-            const baseSha = eventBaseSha || artifactBaseSha || pr.base.sha;
+            const baseSha = artifactBaseSha || eventBaseSha || pr.base.sha;
             if (!/^[a-f0-9]{40}$/i.test(baseSha)) throw new Error("invalid PR base sha");
             if ((eventBaseSha || artifactBaseSha) && pr.base.sha !== baseSha) {
               core.notice("PR quality summary skipped: workflow_run is stale for this PR base");
@@ -255,10 +276,13 @@ jobs:
               throw new Error(`ambiguous workflow_run pull request bindings: ${runPRs.length}`);
             }
             let prNumber = Number(runPRs[0]?.number || 0);
-            let eventBaseSha = runPRs[0]?.base?.sha || "";
+            const eventBaseSha = runPRs[0]?.base?.sha || "";
             const eventHeadSha = runPRs[0]?.head?.sha || "";
-            const targetHeadSha = eventHeadSha || run.head_sha;
+            const targetHeadSha = run.head_sha;
             if (!/^[a-f0-9]{40}$/i.test(targetHeadSha)) throw new Error("invalid PR head sha");
+            if (eventHeadSha && eventHeadSha.toLowerCase() !== targetHeadSha.toLowerCase()) {
+              core.notice("semantic review using workflow_run head_sha because workflow_run pull request head differs from the CI run head");
+            }
 
             const factsArtifactPattern = /^quality-gate-facts-([a-f0-9]{40})-([a-f0-9]{40})$/i;
             const { data: artifactData } = await github.rest.actions.listWorkflowRunArtifacts({
@@ -279,11 +303,11 @@ jobs:
               if (artifactHeadSha.toLowerCase() !== targetHeadSha.toLowerCase()) {
                 artifactError = "facts artifact head sha does not match verified PR head sha";
                 factsArtifactName = "";
-              } else if (eventBaseSha && parsedBaseSha.toLowerCase() !== eventBaseSha.toLowerCase()) {
-                artifactError = "facts artifact base sha does not match workflow_run pull request base sha";
-                factsArtifactName = "";
               } else {
                 artifactBaseSha = parsedBaseSha;
+                if (eventBaseSha && parsedBaseSha.toLowerCase() !== eventBaseSha.toLowerCase()) {
+                  core.notice("semantic review using facts artifact base because workflow_run pull request base differs from the CI facts artifact base");
+                }
               }
             }
             if (!prNumber) {
@@ -293,31 +317,44 @@ jobs:
                 commit_sha: targetHeadSha,
               });
               const candidatePRs = associatedPRs.filter((candidate) =>
-                candidate.state === "open" &&
                 candidate.base?.repo?.id === context.payload.repository.id &&
                 candidate.head?.sha === targetHeadSha
               );
-              if (candidatePRs.length > 1) {
-                throw new Error(`ambiguous open PRs for workflow_run head ${targetHeadSha}: ${candidatePRs.length}`);
+              const openCandidatePRs = candidatePRs.filter((candidate) => candidate.state === "open");
+              if (openCandidatePRs.length > 1) {
+                throw new Error(`ambiguous open PRs for workflow_run head ${targetHeadSha}: ${openCandidatePRs.length}`);
               }
-              if (candidatePRs.length === 1) {
-                prNumber = candidatePRs[0].number;
+              if (openCandidatePRs.length === 1) {
+                prNumber = openCandidatePRs[0].number;
+              } else if (candidatePRs.length > 0) {
+                core.notice("semantic review skipped: workflow_run target PR is no longer open");
+                core.setOutput("stale", "true");
+                return;
               }
             }
             if (!prNumber) {
               const candidatePRs = await github.paginate(github.rest.pulls.list, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                state: "open",
+                state: "all",
                 per_page: 100,
               }).then((prs) => prs.filter((candidate) =>
                 candidate.base?.repo?.id === context.payload.repository.id &&
                 candidate.head?.sha === targetHeadSha
               ));
-              if (candidatePRs.length !== 1) {
+              const openCandidatePRs = candidatePRs.filter((candidate) => candidate.state === "open");
+              if (openCandidatePRs.length > 1) {
+                throw new Error(`ambiguous open PRs from pull list fallback for workflow_run head ${targetHeadSha}: ${openCandidatePRs.length}`);
+              }
+              if (openCandidatePRs.length === 1) {
+                prNumber = openCandidatePRs[0].number;
+              } else if (candidatePRs.length > 0) {
+                core.notice("semantic review skipped: workflow_run target PR is no longer open");
+                core.setOutput("stale", "true");
+                return;
+              } else {
                 throw new Error(`expected one open PR from pull list fallback for workflow_run head ${targetHeadSha}, got ${candidatePRs.length}`);
               }
-              prNumber = candidatePRs[0].number;
             }
             if (!Number.isInteger(prNumber) || prNumber <= 0) throw new Error("missing pull request binding");
             const { data: pr } = await github.rest.pulls.get({
@@ -326,12 +363,22 @@ jobs:
               pull_number: prNumber,
             });
             if (pr.base.repo.id !== context.payload.repository.id) throw new Error("PR base repo mismatch");
+            if (pr.state !== "open") {
+              core.notice("semantic review skipped: workflow_run target PR is no longer open");
+              core.setOutput("stale", "true");
+              return;
+            }
+            if (!pr.head.repo) {
+              core.notice("semantic review skipped: workflow_run target PR head repository is unavailable");
+              core.setOutput("stale", "true");
+              return;
+            }
             if (pr.head.sha !== targetHeadSha) {
               core.notice("semantic review skipped: workflow_run is stale for this PR head");
               core.setOutput("stale", "true");
               return;
             }
-            const baseSha = eventBaseSha || artifactBaseSha || pr.base.sha;
+            const baseSha = artifactBaseSha || eventBaseSha || pr.base.sha;
             if (!/^[a-f0-9]{40}$/i.test(baseSha)) throw new Error("invalid PR base sha");
             if ((eventBaseSha || artifactBaseSha) && pr.base.sha !== baseSha) {
               core.notice("semantic review skipped: workflow_run is stale for this PR base");
@@ -383,6 +430,10 @@ jobs:
               repo: context.repo.repo,
               pull_number: pr,
             });
+            if (pull.state !== "open") {
+              core.notice("semantic review skipped infrastructure failure check: PR is no longer open");
+              return;
+            }
             if (pull.head.sha !== headSha) {
               core.notice("semantic review skipped infrastructure failure check: PR head changed");
               return;

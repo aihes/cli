@@ -150,8 +150,12 @@ func loadFFI() error {
 		}
 		for _, d := range derefs {
 			sym, e := purego.Dlsym(d.handle, d.name)
-			if e != nil || sym == 0 {
-				ffiErr = fmt.Errorf("keysigner: dlsym %s: %v", d.name, e)
+			if e != nil {
+				ffiErr = fmt.Errorf("keysigner: dlsym %s: %w", d.name, e)
+				return
+			}
+			if sym == 0 {
+				ffiErr = fmt.Errorf("keysigner: dlsym %s returned zero address", d.name)
 				return
 			}
 			// deref of a stable dylib data-symbol address (not Go-managed memory), so safe.
@@ -170,8 +174,12 @@ func loadFFI() error {
 		}
 		for _, a := range addrs {
 			sym, e := purego.Dlsym(a.handle, a.name)
-			if e != nil || sym == 0 {
-				ffiErr = fmt.Errorf("keysigner: dlsym %s: %v", a.name, e)
+			if e != nil {
+				ffiErr = fmt.Errorf("keysigner: dlsym %s: %w", a.name, e)
+				return
+			}
+			if sym == 0 {
+				ffiErr = fmt.Errorf("keysigner: dlsym %s returned zero address", a.name)
 				return
 			}
 			*a.dst = sym

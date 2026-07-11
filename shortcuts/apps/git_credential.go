@@ -17,6 +17,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/spf13/cobra"
 
@@ -32,6 +33,7 @@ import (
 )
 
 const gitCredentialIssuePath = apiBasePath + "/apps/:app_id/git_info"
+const gitCredentialHelperReportedShortcut = appsService + ":+git-credential-helper"
 
 // gitCredentialIssueHint is the actionable next-step attached to a failed
 // Git-credential issuance. A 5xx is flagged retryable separately at the call site.
@@ -302,7 +304,12 @@ func (i factoryIssuer) Issue(ctx context.Context, appID string, profile gitcred.
 		HttpMethod: http.MethodGet,
 		ApiPath:    issuePath(appID),
 	}
-	resp, err := ac.DoSDKRequest(ctx, req, core.AsUser)
+	ctx = contextWithGitCredentialHelperShortcut(ctx)
+	var opts []larkcore.RequestOptionFunc
+	if optFn := cmdutil.ShortcutHeaderOpts(ctx); optFn != nil {
+		opts = append(opts, optFn)
+	}
+	resp, err := ac.DoSDKRequest(ctx, req, core.AsUser, opts...)
 	data, err := parseIssueCredentialData(resp, err, errclass.ClassifyContext{
 		Brand:    string(cfg.Brand),
 		AppID:    cfg.AppID,
@@ -312,6 +319,13 @@ func (i factoryIssuer) Issue(ctx context.Context, appID string, profile gitcred.
 		return nil, err
 	}
 	return issuedFromData(appID, data)
+}
+
+func contextWithGitCredentialHelperShortcut(ctx context.Context) context.Context {
+	if _, ok := cmdutil.ShortcutNameFromContext(ctx); ok {
+		return ctx
+	}
+	return cmdutil.ContextWithShortcut(ctx, gitCredentialHelperReportedShortcut, uuid.New().String())
 }
 
 func runGitCredentialHelper(ctx context.Context, f *cmdutil.Factory, appID, action string) error {
@@ -474,7 +488,7 @@ func issuedFromData(appID string, data map[string]interface{}) (*gitcred.IssuedC
 // handled locally.
 func parseIssueCredentialData(resp *larkcore.ApiResp, err error, cc errclass.ClassifyContext) (map[string]any, error) {
 	if err != nil {
-		return nil, client.WrapDoAPIError(err)
+		return nil, redactGitCredentialIssueError(client.WrapDoAPIError(err))
 	}
 	detail := logIDDetail(resp)
 	if resp == nil || len(resp.RawBody) == 0 {
@@ -487,7 +501,7 @@ func parseIssueCredentialData(resp *larkcore.ApiResp, err error, cc errclass.Cla
 	if jsonErr != nil || hasCode || resp.StatusCode >= http.StatusBadRequest {
 		data, cerr := common.ClassifyAPIResponseWith(resp, cc)
 		if cerr != nil {
-			return nil, withAppsHint(cerr, gitCredentialIssueHint)
+			return nil, redactGitCredentialIssueError(withAppsHint(cerr, gitCredentialIssueHint))
 		}
 		if data != nil {
 			result = data
@@ -522,6 +536,7 @@ func checkGitInfoBaseResp(result map[string]any, logID string) error {
 		if message == "" {
 			message = "Git credential API returned non-zero BaseResp status"
 		}
+		message = gitcred.RedactCredentialText(message)
 		baseErr := errs.NewAPIError(errs.SubtypeUnknown, "Issue app Git credential: %s", message).WithCode(int(code))
 		if logID != "" {
 			baseErr = baseErr.WithLogID(logID)
@@ -529,6 +544,17 @@ func checkGitInfoBaseResp(result map[string]any, logID string) error {
 		return baseErr
 	}
 	return nil
+}
+
+func redactGitCredentialIssueError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if p, ok := errs.ProblemOf(err); ok {
+		p.Message = gitcred.RedactCredentialText(p.Message)
+		p.Hint = gitcred.RedactCredentialText(p.Hint)
+	}
+	return err
 }
 
 func logIDDetail(resp *larkcore.ApiResp) map[string]any {

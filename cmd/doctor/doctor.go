@@ -132,7 +132,10 @@ func doctorRun(opts *DoctorOptions) error {
 	if diagnostics.Bot.Available || diagnostics.User.Available {
 		checks = append(checks, pass("identity_ready", "at least one identity is available"))
 	} else {
-		checks = append(checks, fail("identity_ready", "no usable bot or user identity is available", "run: lark-cli auth status --verify"))
+		// No hint: this only summarizes the two checks above, which already carry
+		// the source-appropriate remediation. A command here would be redundant,
+		// or wrong (`auth status` is blocked under an external provider).
+		checks = append(checks, fail("identity_ready", "no usable bot or user identity is available", ""))
 	}
 
 	// ── 3b. private_key_jwt / TEE signer (local; runs even with --offline) ──
@@ -313,9 +316,9 @@ func finishDoctor(f *cmdutil.Factory, checks []checkResult) error {
 	workspace := core.CurrentWorkspace().Display()
 	// A terminal on STDOUT gets a readable report; pipes, redirects, scripts and
 	// tests keep the stable JSON contract (NO_COLOR disables ANSI styling).
-	// StdoutIsTerminal checks stdout specifically — IOStreams.IsTerminal reflects
+	// OutIsTerminal checks stdout specifically — IOStreams.IsTerminal reflects
 	// stdin, which would wrongly send the human report into `doctor | jq`.
-	if f.IOStreams.StdoutIsTerminal() {
+	if f.IOStreams.OutIsTerminal {
 		renderDoctorHuman(f.IOStreams.Out, workspace, checks, allOK, os.Getenv("NO_COLOR") == "")
 	} else {
 		output.PrintJson(f.IOStreams.Out, map[string]interface{}{
