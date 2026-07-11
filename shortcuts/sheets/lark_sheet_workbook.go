@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -1816,9 +1817,13 @@ func lookupFirstSheetID(ctx context.Context, runtime *common.RuntimeContext, tok
 //
 // Imports a local xlsx/xls/csv file as a brand-new spreadsheet. The full
 // upload → create-task → poll flow is the shared drive import core
-// (drive.RunImport); this shortcut only pins the target type to "sheet" and
-// omits the bitable-only --target-token. Symmetric with +workbook-export.
-// Not exposed as an MCP tool.
+// (drive.RunImport); this shortcut only pins the target type to "sheet",
+// omits the bitable-only --target-token, and — because spreadsheet source
+// files are routinely misnamed (an .xlsx exported/renamed to .xls, etc.) —
+// sniffs the file's real container so the drive import backend receives the
+// true file_extension instead of failing with a cryptic
+// "xml_version_not_support". Symmetric with +workbook-export. Not exposed as
+// an MCP tool.
 
 // WorkbookImport imports a local spreadsheet file as a new Feishu spreadsheet
 // by delegating to the shared drive import core with type fixed to "sheet".
@@ -1832,24 +1837,119 @@ var WorkbookImport = common.Shortcut{
 	HasFormat:   true,
 	Flags:       flagsFor("+workbook-import"),
 	Validate: func(ctx context.Context, runtime *common.RuntimeContext) error {
-		return drive.ValidateImport(workbookImportParams(runtime))
+		params, err := workbookImportParams(runtime)
+		if err != nil {
+			return err
+		}
+		return drive.ValidateImport(params)
 	},
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
-		return drive.PlanImportDryRun(runtime, workbookImportParams(runtime))
+		params, err := workbookImportParams(runtime)
+		if err != nil {
+			return common.NewDryRunAPI().Set("error", err.Error())
+		}
+		dry := drive.PlanImportDryRun(runtime, params)
+		if note := workbookImportMislabelNote(params); note != "" {
+			dry.Desc(note)
+		}
+		return dry
 	},
 	Execute: func(ctx context.Context, runtime *common.RuntimeContext) error {
-		return drive.RunImport(ctx, runtime, workbookImportParams(runtime))
+		params, err := workbookImportParams(runtime)
+		if err != nil {
+			return err
+		}
+		if note := workbookImportMislabelNote(params); note != "" {
+			fmt.Fprintln(runtime.IO().ErrOut, note)
+		}
+		return drive.RunImport(ctx, runtime, params)
 	},
 }
 
 // workbookImportParams builds the drive import request for +workbook-import,
 // pinning DocType to "sheet". The bitable-only --target-token is intentionally
-// not exposed here — use drive +import for non-sheet import targets.
-func workbookImportParams(runtime *common.RuntimeContext) drive.ImportParams {
-	return drive.ImportParams{
-		File:        runtime.Str("file"),
+// not exposed here — use drive +import for non-sheet import targets. It also
+// resolves a corrected file extension via content sniffing (see
+// correctedWorkbookExtension) and surfaces it through ImportParams.FileExtension.
+func workbookImportParams(runtime *common.RuntimeContext) (drive.ImportParams, error) {
+	file := runtime.Str("file")
+	params := drive.ImportParams{
+		File:        file,
 		DocType:     "sheet",
 		FolderToken: runtime.Str("folder-token"),
 		Name:        runtime.Str("name"),
 	}
+	ext, err := correctedWorkbookExtension(runtime.FileIO(), file)
+	if err != nil {
+		return params, err
+	}
+	params.FileExtension = ext
+	return params, nil
+}
+
+// correctedWorkbookExtension returns an override extension when the file's
+// declared .xls/.xlsx suffix disagrees with its real container, "" when the
+// declared suffix is correct (or the extension is not in the Excel family, or
+// the file cannot yet be read). A declared Excel file whose bytes match neither
+// container yields a prescriptive validation error rather than deferring to the
+// backend's opaque "xml_version_not_support".
+func correctedWorkbookExtension(fio fileio.FileIO, filePath string) (string, error) {
+	declared := strings.TrimPrefix(strings.ToLower(filepath.Ext(filePath)), ".")
+	if declared != "xls" && declared != "xlsx" {
+		return "", nil
+	}
+
+	sniffed, ok := sniffWorkbookContainer(fio, filePath)
+	if !ok {
+		// Not readable here; let the drive core's stat/upload surface any error.
+		return "", nil
+	}
+	switch sniffed {
+	case declared:
+		return "", nil
+	case "xls", "xlsx":
+		return sniffed, nil
+	default:
+		return "", errs.NewValidationError(errs.SubtypeInvalidArgument,
+			"file %s has a .%s extension but its content is neither an OOXML (.xlsx) nor a legacy Excel (.xls) workbook; re-save it as a real .xlsx/.xls (or export to .csv) before importing",
+			filePath, declared).WithParam("--file")
+	}
+}
+
+// sniffWorkbookContainer inspects a file's leading magic bytes to tell an OOXML
+// workbook (zip container -> .xlsx) apart from a legacy OLE2/BIFF workbook
+// (compound document -> .xls). The second return value is false when the file
+// cannot be read far enough to judge (open error or fewer than the four
+// discriminating bytes). When true, the format is "xlsx", "xls", or "" (bytes
+// matching neither container).
+func sniffWorkbookContainer(fio fileio.FileIO, filePath string) (string, bool) {
+	f, err := fio.Open(filePath)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	var head [8]byte
+	n, _ := io.ReadFull(f, head[:])
+	if n < 4 {
+		return "", false
+	}
+	switch {
+	case head[0] == 0x50 && head[1] == 0x4B: // "PK" -> ZIP, i.e. OOXML .xlsx
+		return "xlsx", true
+	case head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 && head[3] == 0xE0: // OLE2 compound doc -> legacy .xls
+		return "xls", true
+	}
+	return "", true
+}
+
+// workbookImportMislabelNote returns a user-facing note when content sniffing
+// overrode the declared extension, or "" when no correction was applied.
+func workbookImportMislabelNote(params drive.ImportParams) string {
+	declared := strings.TrimPrefix(strings.ToLower(filepath.Ext(params.File)), ".")
+	if params.FileExtension == "" || params.FileExtension == declared {
+		return ""
+	}
+	return fmt.Sprintf("Note: %s has a mislabeled .%s extension but is actually a .%s workbook; importing it as .%s.",
+		filepath.Base(params.File), declared, params.FileExtension, params.FileExtension)
 }
