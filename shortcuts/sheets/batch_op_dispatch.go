@@ -421,12 +421,41 @@ func translateBatchOperations(rawOps []interface{}, token string) ([]interface{}
 			WithHint("split the operations into %d separate +batch-update calls of at most %d entries each", batches, maxBatchOperations)
 	}
 	out := make([]interface{}, 0, len(rawOps))
+	var totalCells int64
 	for i, raw := range rawOps {
 		translated, err := translateBatchOp(raw, token, i)
 		if err != nil {
 			return nil, err
 		}
+		totalCells += translatedCellCount(translated)
+		if totalCells > maxStampMatrixCells {
+			return nil, sheetsValidationForFlag("operations",
+				"--operations materialize %d cells total, over the %d-cell safety cap; reduce the number or size of cell operations",
+				totalCells, maxStampMatrixCells)
+		}
 		out = append(out, translated)
 	}
 	return out, nil
+}
+
+func translatedCellCount(op map[string]interface{}) int64 {
+	input, _ := op["input"].(map[string]interface{})
+	switch cells := input["cells"].(type) {
+	case [][]interface{}:
+		var total int64
+		for _, row := range cells {
+			total += int64(len(row))
+		}
+		return total
+	case []interface{}:
+		var total int64
+		for _, rawRow := range cells {
+			if row, ok := rawRow.([]interface{}); ok {
+				total += int64(len(row))
+			}
+		}
+		return total
+	default:
+		return 0
+	}
 }

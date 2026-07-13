@@ -598,8 +598,11 @@ var WorkbookCreate = common.Shortcut{
 			if err != nil {
 				return err
 			}
-			_, err = parseWorkbookCreateSheetStyles(runtime, payload)
-			return err
+			styles, err := parseWorkbookCreateSheetStyles(runtime, payload)
+			if err != nil {
+				return err
+			}
+			return payload.checkCellBudgetWithStyles(styles)
 		}
 		// Untyped --values path: parse (and validate) --styles as a single sheet
 		// style item, then synthesize --values into a type-less typed payload —
@@ -839,6 +842,9 @@ func buildValuesPayload(runtime flagView, sheetStyles *workbookCreateSheetStyles
 	}
 	if maxCols == 0 || nrows == 0 {
 		return nil, nil // nothing to write (e.g. --values '[]' with no styles)
+	}
+	if err := checkTablePutCellBudget(int64(nrows) * int64(maxCols)); err != nil {
+		return nil, err
 	}
 	// Pad to a rectangle; nil cells become empty cells in buildTypedCell.
 	for len(rows) < nrows {
@@ -1385,39 +1391,36 @@ func workbookCreateStyleDimensions(styles *workbookCreateStylePayload, baseCol, 
 	return rows, cols
 }
 
-// padMatrixForStyles grows the matrix down and right so it covers every
-// cell_styles range, appending empty cells for the positions the data doesn't
-// reach. cell_styles are applied by writing into the matrix in place (see
-// applyWorkbookCreateStylesToMatrix), so a style on a cell past the data extent
-// needs a real — if empty — cell to attach to. This lets a create/write set
-// styles on blank cells (reserved regions, decorative headers, empty borders).
-//
-// Only cell_styles contribute to the extent: cell_merges / row_sizes / col_sizes
-// run as separate API calls (see workbookCreateVisualOps) and never touch the
-// matrix. Ranges that start left of baseCol or above baseRow are skipped here
-// (the matrix can only extend down/right) and left for the caller to reject.
-// The (possibly reallocated) matrix is returned; callers must use the result.
-func padMatrixForStyles(rows [][]interface{}, styles *workbookCreateStylePayload, baseCol, baseRow int) [][]interface{} {
+// matrixDimensionsForStyles projects the padded matrix size without allocating
+// it. Only cell_styles contribute; merges and row/column sizes use separate API
+// calls. Ranges up/left of the write anchor are left for the caller to reject.
+func matrixDimensionsForStyles(rows, cols int, styles *workbookCreateStylePayload, baseCol, baseRow int) (int, int) {
 	if styles == nil {
-		return rows
-	}
-	needRows := len(rows)
-	needCols := 0
-	if len(rows) > 0 {
-		needCols = len(rows[0])
+		return rows, cols
 	}
 	for _, op := range styles.CellStyles {
 		startCol, startRow, endCol, endRow, err := workbookCreateStyleRangeBounds(op.Range)
 		if err != nil || startCol < baseCol || startRow < baseRow {
 			continue // unparsable, or up/left of the anchor: not paddable
 		}
-		if endCol-baseCol+1 > needCols {
-			needCols = endCol - baseCol + 1
+		if endCol-baseCol+1 > cols {
+			cols = endCol - baseCol + 1
 		}
-		if endRow-baseRow+1 > needRows {
-			needRows = endRow - baseRow + 1
+		if endRow-baseRow+1 > rows {
+			rows = endRow - baseRow + 1
 		}
 	}
+	return rows, cols
+}
+
+// padMatrixForStyles grows the matrix down and right to the projected style
+// extent, appending empty cells that cell_styles can mutate in place.
+func padMatrixForStyles(rows [][]interface{}, styles *workbookCreateStylePayload, baseCol, baseRow int) [][]interface{} {
+	needCols := 0
+	if len(rows) > 0 {
+		needCols = len(rows[0])
+	}
+	needRows, needCols := matrixDimensionsForStyles(len(rows), needCols, styles, baseCol, baseRow)
 	// Widen existing rows to needCols.
 	for r := range rows {
 		for len(rows[r]) < needCols {

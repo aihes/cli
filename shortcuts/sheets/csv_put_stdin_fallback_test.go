@@ -90,3 +90,26 @@ func TestCsvPutPreRunE_ExplicitValueUnchanged(t *testing.T) {
 		t.Errorf("csv = %q, want %q (explicit value must not be overridden)", got, "x,y")
 	}
 }
+
+func TestCsvPutPostMount_ComposesExistingPreRunE(t *testing.T) {
+	withStdinIsPipe(t, true)
+	cmd := &cobra.Command{Use: "+csv-put"}
+	cmd.Flags().String("start-cell", "", "")
+	cmd.Flags().String("range", "", "")
+	cmd.Flags().String("csv", "", "")
+	called := false
+	cmd.PreRunE = func(*cobra.Command, []string) error {
+		called = true
+		return nil
+	}
+	CsvPut.PostMount(cmd)
+	if err := cmd.PreRunE(cmd, nil); err != nil {
+		t.Fatalf("PreRunE error = %v", err)
+	}
+	if !called {
+		t.Fatal("existing PreRunE was not called")
+	}
+	if got, _ := cmd.Flags().GetString("csv"); got != "-" {
+		t.Fatalf("csv = %q, want fallback after existing PreRunE", got)
+	}
+}

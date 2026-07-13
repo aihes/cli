@@ -508,6 +508,9 @@ func resizeMapInput(runtime flagView, token, sheetID, sheetName, dimension strin
 	if len(entries) == 0 {
 		return nil, sheetsValidationForFlag(mapFlag, "--%s must contain at least one entry", mapFlag)
 	}
+	if len(entries) > maxBatchOperations {
+		return nil, sheetsValidationForFlag(mapFlag, "--%s accepts at most %d entries; got %d", mapFlag, maxBatchOperations, len(entries))
+	}
 
 	type resizeOp struct {
 		start    int

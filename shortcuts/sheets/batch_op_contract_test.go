@@ -938,6 +938,42 @@ func TestBatchOp_EnumParity(t *testing.T) {
 		}
 	})
 
+	t.Run("cross-vocabulary alias is normalized", func(t *testing.T) {
+		t.Parallel()
+		got, err := translateBatchOp(map[string]interface{}{
+			"shortcut": "+cells-set-style",
+			"input": map[string]interface{}{
+				"sheet-id": "sh1", "range": "A1", "vertical-alignment": "center",
+			},
+		}, testToken, 0)
+		if err != nil {
+			t.Fatalf("translateBatchOp: %v", err)
+		}
+		input := got["input"].(map[string]interface{})
+		cells := input["cells"].([][]interface{})
+		style := cells[0][0].(map[string]interface{})["cell_styles"].(map[string]interface{})
+		if style["vertical_alignment"] != "middle" {
+			t.Fatalf("vertical_alignment = %v, want middle", style["vertical_alignment"])
+		}
+	})
+
+	t.Run("underscore input keys are accepted", func(t *testing.T) {
+		t.Parallel()
+		got, err := translateBatchOp(map[string]interface{}{
+			"shortcut": "+range-copy",
+			"input": map[string]interface{}{
+				"sheet_id": "sh1", "source_range": "A1:B2", "target_range": "D1", "paste_type": "values",
+			},
+		}, testToken, 0)
+		if err != nil {
+			t.Fatalf("translateBatchOp: %v", err)
+		}
+		input := got["input"].(map[string]interface{})
+		if input["range"] != "A1:B2" || input["destination_range"] != "D1" || input["paste_type"] != "value_only" {
+			t.Fatalf("translated underscore-key input = %#v", input)
+		}
+	})
+
 	tests := []struct {
 		name     string
 		shortcut string

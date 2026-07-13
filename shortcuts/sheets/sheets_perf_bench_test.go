@@ -4,26 +4,20 @@
 package sheets
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-// These benchmarks back the memory review of the sheets fan-out / download
-// paths. They measure two hot spots:
+// These benchmarks back the memory review of the sheets fan-out paths. They
+// measure the cell matrices materialized by range-based shortcuts and table IO.
 //
 //   1. fillCellsMatrix — fan-out shortcuts (+cells-set-style, +dropdown-set,
 //      +cells-batch-set-style, +dropdown-update) expand one A1 range into a
 //      rows×cols matrix of per-cell maps. A tiny input string ("A1:Z100000")
 //      explodes into millions of heap maps with no upper bound.
-//
-//   2. the export-download reader — strings.NewReader(string(rawBody)) copies
-//      the whole downloaded file once more before saving it.
-//
-// Run: go test ./shortcuts/sheets -run XXX -bench 'FillCellsMatrix|DownloadReader' -benchmem
+// Run: go test ./shortcuts/sheets -run XXX -bench 'FillCellsMatrix|BuildSheetMatrix' -benchmem
 
 var styleProto = map[string]interface{}{
 	"cell_styles":   map[string]interface{}{"bold": true, "fg_color": "#FF0000"},
@@ -136,28 +130,6 @@ func TestTablePutMatrixPeakMemory(t *testing.T) {
 	}
 }
 
-// --- export-download reader copy ---
-
-func benchDownloadReader(b *testing.B, size int, useStringCopy bool) {
-	raw := bytes.Repeat([]byte("x"), size)
-	sink := make([]byte, 32*1024)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var r io.Reader
-		if useStringCopy {
-			r = strings.NewReader(string(raw)) // current code: extra full-size copy
-		} else {
-			r = bytes.NewReader(raw) // fix: no copy
-		}
-		for {
-			if _, err := r.Read(sink); err != nil {
-				break
-			}
-		}
-	}
-}
-
 // --- fan-out cell-budget cap (fix for the unbounded matrix blow-up) ---
 
 func TestStampMatrixBudgetCap(t *testing.T) {
@@ -212,6 +184,28 @@ func TestTablePutCellBudgetCap(t *testing.T) {
 	}
 }
 
+func TestTablePutCellBudgetIncludesStylePadding(t *testing.T) {
+	payload := &tablePayload{Sheets: []tableSheetSpec{{
+		Columns: make([]tableColumnSpec, 1),
+		Rows:    make([][]interface{}, 1),
+	}}}
+	styles := &workbookCreateSheetStyles{ByIndex: []*workbookCreateStylePayload{{
+		CellStyles: []workbookCreateCellStyleOp{{Range: "A1:AX25000"}},
+	}}}
+	if err := payload.checkCellBudgetWithStyles(styles); err == nil {
+		t.Fatal("1x1 data padded by styles to 1.25M cells should be rejected before allocation")
+	}
+
+	twoSheets := &tablePayload{Sheets: []tableSheetSpec{
+		{Columns: make([]tableColumnSpec, 1), Rows: make([][]interface{}, 1)},
+		{Columns: make([]tableColumnSpec, 1), Rows: make([][]interface{}, 1)},
+	}}
+	style := &workbookCreateStylePayload{CellStyles: []workbookCreateCellStyleOp{{Range: "A1:Z20000"}}}
+	if err := twoSheets.checkCellBudgetWithStyles(&workbookCreateSheetStyles{ByIndex: []*workbookCreateStylePayload{style, style}}); err == nil {
+		t.Fatal("style-padded cells should be summed across sheets")
+	}
+}
+
 // TestBatchStampAggregateCap covers the batch fan-out aggregate budget — the
 // per-range cap can't stop many ranges from summing past the matrix ceiling.
 func TestBatchStampAggregateCap(t *testing.T) {
@@ -262,11 +256,4 @@ func BenchmarkStampBudget_RejectsOversized(b *testing.B) {
 			b.Fatal("expected rejection")
 		}
 	}
-}
-
-func BenchmarkDownloadReader_StringCopy_1MB(b *testing.B)  { benchDownloadReader(b, 1<<20, true) }
-func BenchmarkDownloadReader_BytesNoCopy_1MB(b *testing.B) { benchDownloadReader(b, 1<<20, false) }
-func BenchmarkDownloadReader_StringCopy_16MB(b *testing.B) { benchDownloadReader(b, 16<<20, true) }
-func BenchmarkDownloadReader_BytesNoCopy_16MB(b *testing.B) {
-	benchDownloadReader(b, 16<<20, false)
 }

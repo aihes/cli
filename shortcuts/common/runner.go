@@ -1109,7 +1109,7 @@ func resolveInputFlags(rctx *RuntimeContext, flags []Flag) error {
 					// Rejected @file paths are usually absolute (temp files under
 					// /tmp). Steer toward stdin rather than cd / copying the file
 					// into the project tree.
-					verr = verr.WithHint("this flag also reads stdin: --%s - < %s", fl.Name, path)
+					verr = verr.WithHint("this flag also reads stdin: pipe the file contents into this command and pass --%s -", fl.Name)
 				}
 				return verr
 			}

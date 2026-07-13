@@ -460,6 +460,16 @@ func TestTablePut_StylesNameMismatchRejected(t *testing.T) {
 	requireValidation(t, err, "must match")
 }
 
+func TestTablePut_StylePaddingBudgetRejectedBeforeDryRun(t *testing.T) {
+	_, _, err := runShortcutCapturingErr(t, TablePut, []string{
+		"--url", testURL,
+		"--sheets", `{"sheets":[{"name":"数据","columns":["a"],"data":[["x"]]}]}`,
+		"--styles", `{"styles":[{"name":"数据","cell_styles":[{"range":"A1:AX25000","font_weight":"bold"}]}]}`,
+		"--dry-run",
+	})
+	requireValidation(t, err, "over the 1000000-cell safety cap")
+}
+
 // TestTablePut_ExecuteWithStyles drives the full write + visual-ops path: the
 // set_cell_range write carries the merged cell_styles, then merge_cells /
 // resize_range tool calls apply the structural styles in the same call.

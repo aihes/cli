@@ -478,6 +478,25 @@ func TestResize_MapFormGuards(t *testing.T) {
 	}
 }
 
+func TestResize_MapFormEntryCap(t *testing.T) {
+	var widths strings.Builder
+	widths.WriteByte('{')
+	for i := 0; i <= maxBatchOperations; i++ {
+		if i > 0 {
+			widths.WriteByte(',')
+		}
+		widths.WriteByte('"')
+		widths.WriteString(columnIndexToLetter(i))
+		widths.WriteString(`":100`)
+	}
+	widths.WriteByte('}')
+	_, _, err := runShortcutCapturingErr(t, ColsResize, []string{
+		"--url", testURL, "--sheet-id", testSheetID,
+		"--widths", widths.String(), "--dry-run",
+	})
+	requireValidation(t, err, "accepts at most 100 entries; got 101")
+}
+
 func TestResize_TypeAndSizeGuards(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

@@ -254,7 +254,13 @@ var CsvPut = common.Shortcut{
 		if fl := cmd.Flags().Lookup("csv"); fl != nil {
 			delete(fl.Annotations, cobra.BashCompOneRequiredFlag)
 		}
-		cmd.PreRunE = func(c *cobra.Command, _ []string) error {
+		prev := cmd.PreRunE
+		cmd.PreRunE = func(c *cobra.Command, args []string) error {
+			if prev != nil {
+				if err := prev(c, args); err != nil {
+					return err
+				}
+			}
 			if v, _ := c.Flags().GetString("csv"); strings.TrimSpace(v) == "" && csvPutStdinIsPipe() {
 				_ = c.Flags().Set("csv", "-")
 			}
@@ -738,7 +744,8 @@ func letterToColumnIndex(letters string) int {
 // cells matrix, so the CLI must expand a range like "A1:Z100000" into rows×cols
 // maps before sending it — an unbounded blow-up (2.6M cells ≈ 900MB heap, then
 // doubled again by json.Marshal) that OOMs the process before the request even
-// leaves. 200000 matches the documented --max-cells safety cap.
+// leaves. The 200000 ceiling is the selected fan-out guardrail; the separately
+// documented --max-cells flag defaults to 50000.
 const maxStampMatrixCells = 200000
 
 // checkStampMatrixBudget rejects a range whose materialized cell count would

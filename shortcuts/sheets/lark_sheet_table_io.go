@@ -63,8 +63,11 @@ var TablePut = common.Shortcut{
 		// --styles is parsed (and aligned against the payload's sheets) up front
 		// so a malformed style item fails before any write lands — mirroring
 		// +workbook-create's Validate.
-		_, err = parseWorkbookCreateSheetStyles(runtime, payload)
-		return err
+		styles, err := parseWorkbookCreateSheetStyles(runtime, payload)
+		if err != nil {
+			return err
+		}
+		return payload.checkCellBudgetWithStyles(styles)
 	},
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
 		return tablePutDryRun(runtime)
@@ -438,6 +441,29 @@ func (p *tablePayload) checkCellBudget() error {
 	for i := range p.Sheets {
 		total += int64(len(p.Sheets[i].Rows)) * int64(len(p.Sheets[i].Columns))
 	}
+	return checkTablePutCellBudget(total)
+}
+
+// checkCellBudgetWithStyles includes the blank cells that cell_styles will add
+// to each sheet's matrix. It must run before DryRun / Execute pads any matrix.
+func (p *tablePayload) checkCellBudgetWithStyles(styles *workbookCreateSheetStyles) error {
+	var total int64
+	for i := range p.Sheets {
+		s := &p.Sheets[i]
+		rows, cols := len(s.Rows), len(s.Columns)
+		_, baseCol, baseRow, _ := sheetAnchor(s)
+		if s.Mode == "append" {
+			// Append resolves its real row at Execute time. Zero is a safe upper
+			// bound for the style-driven extent and keeps validation allocation-free.
+			baseRow = 0
+		}
+		rows, cols = matrixDimensionsForStyles(rows, cols, styles.styleFor(i), baseCol, baseRow)
+		total += int64(rows) * int64(cols)
+	}
+	return checkTablePutCellBudget(total)
+}
+
+func checkTablePutCellBudget(total int64) error {
 	if total > maxTablePutCells {
 		return common.ValidationErrorf(
 			"--sheets/--values cover %d cells total, over the %d-cell safety cap; split the write across smaller payloads",

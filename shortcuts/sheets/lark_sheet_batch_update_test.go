@@ -487,6 +487,28 @@ func TestTranslateBatchOperations_OverLimitSplitHint(t *testing.T) {
 	}
 }
 
+func TestTranslateBatchOperations_AggregateCellCap(t *testing.T) {
+	ops := []interface{}{
+		map[string]interface{}{
+			"shortcut": "+cells-set-style",
+			"input": map[string]interface{}{
+				"sheet-id": "sh1", "range": "A1:A100001", "font-weight": "bold",
+			},
+		},
+		map[string]interface{}{
+			"shortcut": "+cells-set-style",
+			"input": map[string]interface{}{
+				"sheet-id": "sh1", "range": "A1:A100000", "font-weight": "bold",
+			},
+		},
+	}
+	_, err := translateBatchOperations(ops, "shtcnX")
+	ve := requireValidation(t, err, "materialize 200001 cells total")
+	if ve.Param != "--operations" {
+		t.Fatalf("param = %q, want --operations", ve.Param)
+	}
+}
+
 // TestSubOpInputContract pins the contract line derivation from flag-defs:
 // reserved spreadsheet locators are omitted, the sheet selector collapses
 // to a choose-one, and required flags are marked.
