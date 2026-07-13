@@ -105,7 +105,7 @@ func TestRunLoadsWaiversFromOverrideFile(t *testing.T) {
 		t.Fatalf("write review: %v", err)
 	}
 	waiversPath := filepath.Join(t.TempDir(), "waivers.txt")
-	if err := os.WriteFile(waiversPath, []byte("semantic-error-hint-confirm\terror_hint\terror\tshortcuts/contact/contact_search_user.go\t199\t\tcli-owner\tsandbox confirm case\t2026-06-11\t2026-07-11\n"), 0o644); err != nil {
+	if err := os.WriteFile(waiversPath, []byte("semantic-error-hint-confirm\terror_hint\terror\tshortcuts/contact/contact_search_user.go\t199\t\tcli-owner\tsandbox confirm case\t2026-06-11\t2099-12-31\n"), 0o644); err != nil {
 		t.Fatalf("write override waivers: %v", err)
 	}
 	decisionPath := filepath.Join(t.TempDir(), "decision.json")
