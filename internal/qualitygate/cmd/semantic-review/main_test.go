@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/larksuite/cli/internal/qualitygate/facts"
 	"github.com/larksuite/cli/internal/qualitygate/semantic"
 )
 
 func TestRunLoadsPolicyAndWaivers(t *testing.T) {
+	freezeNow(t, time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC))
+
 	repo := t.TempDir()
 	writeSemanticConfig(t, repo, `{
 	  "schema_version": 1,
@@ -65,6 +68,8 @@ func TestRunLoadsPolicyAndWaivers(t *testing.T) {
 }
 
 func TestRunLoadsWaiversFromOverrideFile(t *testing.T) {
+	freezeNow(t, time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC))
+
 	repo := t.TempDir()
 	writeSemanticConfig(t, repo, `{
 	  "schema_version": 1,
@@ -105,7 +110,7 @@ func TestRunLoadsWaiversFromOverrideFile(t *testing.T) {
 		t.Fatalf("write review: %v", err)
 	}
 	waiversPath := filepath.Join(t.TempDir(), "waivers.txt")
-	if err := os.WriteFile(waiversPath, []byte("semantic-error-hint-confirm\terror_hint\terror\tshortcuts/contact/contact_search_user.go\t199\t\tcli-owner\tsandbox confirm case\t2026-06-11\t2099-12-31\n"), 0o644); err != nil {
+	if err := os.WriteFile(waiversPath, []byte("semantic-error-hint-confirm\terror_hint\terror\tshortcuts/contact/contact_search_user.go\t199\t\tcli-owner\tsandbox confirm case\t2026-06-11\t2026-07-11\n"), 0o644); err != nil {
 		t.Fatalf("write override waivers: %v", err)
 	}
 	decisionPath := filepath.Join(t.TempDir(), "decision.json")
@@ -368,6 +373,13 @@ func writeSemanticConfig(t *testing.T, repo, policy, models, waivers string) {
 			t.Fatalf("write waivers: %v", err)
 		}
 	}
+}
+
+func freezeNow(t *testing.T, fixed time.Time) {
+	t.Helper()
+	original := now
+	now = func() time.Time { return fixed }
+	t.Cleanup(func() { now = original })
 }
 
 func readDecision(t *testing.T, path string) semantic.Decision {
