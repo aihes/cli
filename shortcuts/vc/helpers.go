@@ -5,11 +5,16 @@ package vc
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/larksuite/cli/errs"
+	"github.com/larksuite/cli/internal/appmeta"
 	"github.com/larksuite/cli/internal/auth"
+	"github.com/larksuite/cli/internal/client"
+	"github.com/larksuite/cli/internal/core"
 	"github.com/larksuite/cli/internal/credential"
+	"github.com/larksuite/cli/internal/registry"
 	"github.com/larksuite/cli/shortcuts/common"
 )
 
@@ -18,11 +23,9 @@ const (
 	meetingQueryBotScope  = "vc:meeting.bot.join:write"
 )
 
-// meetingQueryAnyScopes are the scopes accepted by the VC meeting query
-// commands (+meeting-list-active, +meeting-events). They are OR, not AND:
-// the upstream APIs authorize the call as long as the caller holds ONE of
-// them — a user_access_token granted vc:meeting.meetingevent:read, or the
-// bot flow granted vc:meeting.bot.join:write.
+// meetingQueryAnyScopes are the identity-specific scopes accepted by the VC
+// meeting query commands (+meeting-list-active, +meeting-events): UAT uses
+// vc:meeting.meetingevent:read, while TAT uses vc:meeting.bot.join:write.
 //
 // The shortcut framework's Scopes/UserScopes/BotScopes preflight is AND, so
 // it cannot express "any of these". Those commands therefore leave the
@@ -33,15 +36,73 @@ var meetingQueryAnyScopes = []string{
 	meetingQueryBotScope,
 }
 
-// checkMeetingQueryAnyScope succeeds when the resolved identity holds at least
-// one scope in meetingQueryAnyScopes. Wire it into a shortcut's Validate (and
-// keep Scopes/UserScopes/BotScopes empty) to get OR-style scope preflight.
-//
-// It is intentionally lenient: when the token or its scope set cannot be
-// resolved locally, it returns nil and lets the remote API be the source of
-// truth, instead of blocking a call the server might still allow.
+type meetingQueryTenantScopesFetcher func(context.Context, *common.RuntimeContext) ([]string, bool, error)
+
+type meetingQueryAppMetaClient struct {
+	apiClient *client.APIClient
+	runtime   *common.RuntimeContext
+}
+
+func (c *meetingQueryAppMetaClient) CallAPI(ctx context.Context, method, path string, body interface{}) (json.RawMessage, error) {
+	resp, err := c.apiClient.DoAPI(ctx, client.RawApiRequest{
+		Method: method,
+		URL:    path,
+		Data:   body,
+		As:     core.AsBot,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.runtime.ClassifyAPIResponse(resp); err != nil {
+		return json.RawMessage(resp.RawBody), err
+	}
+	return json.RawMessage(resp.RawBody), nil
+}
+
+func fetchMeetingQueryTenantScopes(ctx context.Context, runtime *common.RuntimeContext) ([]string, bool, error) {
+	if runtime == nil || runtime.Factory == nil || runtime.Config == nil ||
+		runtime.Factory.LarkClient == nil || runtime.Factory.HttpClient == nil {
+		return nil, false, nil
+	}
+	apiClient, err := runtime.Factory.NewAPIClientWithConfig(runtime.Config)
+	if err != nil {
+		return nil, false, err
+	}
+	appVersion, err := appmeta.FetchCurrentPublished(ctx, &meetingQueryAppMetaClient{
+		apiClient: apiClient,
+		runtime:   runtime,
+	}, runtime.Config.AppID)
+	if err != nil {
+		return nil, false, err
+	}
+	if appVersion == nil {
+		return nil, false, nil
+	}
+	return appVersion.TenantScopes, true, nil
+}
+
 func checkMeetingQueryAnyScope(ctx context.Context, runtime *common.RuntimeContext) error {
-	if runtime == nil || runtime.Factory == nil || runtime.Factory.Credential == nil || runtime.Config == nil {
+	return checkMeetingQueryScopeWithTenantScopes(ctx, runtime, fetchMeetingQueryTenantScopes)
+}
+
+func checkMeetingQueryScopeWithTenantScopes(ctx context.Context, runtime *common.RuntimeContext, fetchTenantScopes meetingQueryTenantScopesFetcher) error {
+	if runtime == nil || runtime.Config == nil {
+		return nil
+	}
+	if runtime.As().IsBot() {
+		if fetchTenantScopes == nil {
+			return nil
+		}
+		scopes, known, err := fetchTenantScopes(ctx, runtime)
+		if err != nil || !known {
+			return nil
+		}
+		if hasAnyGrantedScope(strings.Join(scopes, " "), []string{meetingQueryBotScope}) {
+			return nil
+		}
+		return newMeetingQueryPermissionError(runtime, meetingQueryBotScope)
+	}
+	if runtime.Factory == nil || runtime.Factory.Credential == nil {
 		return nil
 	}
 	// Resolve the identity's granted scopes. If anything about the token cannot
@@ -54,27 +115,27 @@ func checkMeetingQueryAnyScope(ctx context.Context, runtime *common.RuntimeConte
 	if result == nil || result.Scopes == "" {
 		return nil
 	}
-	if hasAnyGrantedScope(result.Scopes, meetingQueryAnyScopes) {
+	if hasAnyGrantedScope(result.Scopes, []string{meetingQueryUserScope}) {
 		return nil
 	}
-	// The APIs accept either scope, but they are granted per identity: a user
-	// token carries vc:meeting.meetingevent:read, the bot flow carries
-	// vc:meeting.bot.join:write. missing_scopes / Hint feed the AI self-heal
-	// path (auth login --scope ...), so only surface the scope the current
-	// identity can actually obtain; reporting both would send a user identity
-	// after the bot-only scope and dead-end the retry.
-	recommended := meetingQueryUserScope
-	if runtime.As().IsBot() {
-		recommended = meetingQueryBotScope
-	}
-	return errs.NewPermissionError(
+	return newMeetingQueryPermissionError(runtime, meetingQueryUserScope)
+}
+
+func newMeetingQueryPermissionError(runtime *common.RuntimeContext, required string) error {
+	permissionErr := errs.NewPermissionError(
 		errs.SubtypeMissingScope,
-		"missing one of required scope(s): %s",
-		strings.Join(meetingQueryAnyScopes, ", "),
+		"missing required scope(s): %s",
+		required,
 	).
-		WithHint("run `lark-cli auth login --scope %q` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login.", recommended).
-		WithMissingScopes(recommended).
+		WithMissingScopes(required).
 		WithIdentity(string(runtime.As()))
+	if runtime.As().IsBot() {
+		consoleURL := registry.BuildConsoleScopeURL(runtime.Config.Brand, runtime.Config.AppID, required)
+		return permissionErr.
+			WithConsoleURL(consoleURL).
+			WithHint("the app developer must apply for scope %s at the developer console: %s", required, consoleURL)
+	}
+	return permissionErr.WithHint("run `lark-cli auth login --scope %q` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login.", required)
 }
 
 func hasAnyGrantedScope(granted string, candidates []string) bool {

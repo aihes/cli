@@ -6,6 +6,7 @@ package vc
 import (
 	"context"
 	"errors"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,33 +69,38 @@ func assertMeetingQueryPermissionError(t *testing.T, err error, identity core.Id
 	if !reflect.DeepEqual(pe.MissingScopes, []string{wantScope}) {
 		t.Fatalf("MissingScopes = %v, want %v", pe.MissingScopes, []string{wantScope})
 	}
-	if !strings.Contains(pe.Hint, "auth login --scope") {
-		t.Fatalf("Hint = %q, want auth login guidance", pe.Hint)
-	}
 	if !strings.Contains(pe.Hint, wantScope) {
 		t.Fatalf("Hint = %q, want recommended scope %q", pe.Hint, wantScope)
 	}
 	if strings.Contains(pe.Hint, otherScope) {
 		t.Fatalf("Hint = %q, must not steer %s identity toward %q", pe.Hint, identity, otherScope)
 	}
-	// The human-readable message still explains that either scope is accepted.
-	if !strings.Contains(pe.Error(), strings.Join(meetingQueryAnyScopes, ", ")) {
-		t.Fatalf("error %q does not mention meeting query scopes %v", pe.Error(), meetingQueryAnyScopes)
+	if identity.IsBot() {
+		if strings.Contains(pe.Hint, "auth login") {
+			t.Fatalf("Hint = %q, must not recommend user login for bot identity", pe.Hint)
+		}
+		if !strings.Contains(pe.Hint, "developer console") {
+			t.Fatalf("Hint = %q, want developer console guidance", pe.Hint)
+		}
+		if !strings.Contains(pe.ConsoleURL, url.QueryEscape(wantScope)) {
+			t.Fatalf("ConsoleURL = %q, want scope %q", pe.ConsoleURL, wantScope)
+		}
+	} else if !strings.Contains(pe.Hint, "auth login --scope") {
+		t.Fatalf("Hint = %q, want auth login guidance", pe.Hint)
+	}
+	if !strings.Contains(pe.Error(), wantScope) {
+		t.Fatalf("error %q does not mention required scope %q", pe.Error(), wantScope)
 	}
 }
 
-func TestCheckMeetingQueryAnyScope_AllowsEitherScopeForBothIdentities(t *testing.T) {
+func TestCheckMeetingQueryScope_UserAllowsMeetingEventScope(t *testing.T) {
 	cases := []struct {
 		name     string
 		identity core.Identity
 		scopes   string
 	}{
 		{name: "user_only_event", identity: core.AsUser, scopes: meetingQueryUserScope},
-		{name: "user_only_join", identity: core.AsUser, scopes: meetingQueryBotScope},
 		{name: "user_both", identity: core.AsUser, scopes: strings.Join(meetingQueryAnyScopes, " ")},
-		{name: "bot_only_event", identity: core.AsBot, scopes: meetingQueryUserScope},
-		{name: "bot_only_join", identity: core.AsBot, scopes: meetingQueryBotScope},
-		{name: "bot_both", identity: core.AsBot, scopes: strings.Join(meetingQueryAnyScopes, " ")},
 	}
 
 	for _, tc := range cases {
@@ -118,7 +124,6 @@ func TestCheckMeetingQueryAnyScope_MissingScopesReturnsPermissionError(t *testin
 		identity core.Identity
 	}{
 		{name: "user", identity: core.AsUser},
-		{name: "bot", identity: core.AsBot},
 	}
 
 	for _, tc := range cases {
@@ -186,6 +191,45 @@ func TestCheckMeetingQueryAnyScope_IsLenientWhenLocalScopeStateIsUnavailable(t *
 			if err := checkMeetingQueryAnyScope(context.Background(), tc.makeRuntime()); err != nil {
 				t.Fatalf("checkMeetingQueryAnyScope() error = %v, want nil", err)
 			}
+		})
+	}
+}
+
+func TestCheckMeetingQueryScope_BotUsesPublishedTenantScopes(t *testing.T) {
+	cases := []struct {
+		name     string
+		scopes   []string
+		known    bool
+		fetchErr error
+		wantErr  bool
+	}{
+		{name: "join_scope_granted", scopes: []string{meetingQueryBotScope}, known: true},
+		{name: "no_tenant_scopes", scopes: []string{}, known: true, wantErr: true},
+		{name: "user_scope_is_not_tenant_join", scopes: []string{meetingQueryUserScope}, known: true, wantErr: true},
+		{name: "app_metadata_unavailable", fetchErr: errors.New("metadata unavailable")},
+		{name: "app_not_published", known: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := bareMeetingQueryRuntime(core.AsBot)
+			err := checkMeetingQueryScopeWithTenantScopes(
+				context.Background(),
+				runtime,
+				func(context.Context, *common.RuntimeContext) ([]string, bool, error) {
+					return tc.scopes, tc.known, tc.fetchErr
+				},
+			)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("checkMeetingQueryScopeWithTenantScopes() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("checkMeetingQueryScopeWithTenantScopes() error = nil, want missing scope")
+			}
+			assertMeetingQueryPermissionError(t, err, core.AsBot)
 		})
 	}
 }
