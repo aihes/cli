@@ -93,8 +93,10 @@ func checkMeetingQueryScopeWithTenantScopes(ctx context.Context, runtime *common
 		if fetchTenantScopes == nil {
 			return nil
 		}
-		scopes, known, err := fetchTenantScopes(ctx, runtime)
-		if err != nil || !known {
+		// App metadata is a best-effort local preflight. When it is unavailable,
+		// let the meeting API remain the source of truth.
+		scopes, known, _ := fetchTenantScopes(ctx, runtime)
+		if !known {
 			return nil
 		}
 		if hasAnyGrantedScope(strings.Join(scopes, " "), []string{meetingQueryBotScope}) {
