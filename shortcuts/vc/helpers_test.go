@@ -56,17 +56,30 @@ func assertMeetingQueryPermissionError(t *testing.T, err error, identity core.Id
 	if pe.Identity != string(identity) {
 		t.Fatalf("Identity = %q, want %q", pe.Identity, identity)
 	}
-	if !reflect.DeepEqual(pe.MissingScopes, meetingQueryAnyScopes) {
-		t.Fatalf("MissingScopes = %v, want %v", pe.MissingScopes, meetingQueryAnyScopes)
+
+	// missing_scopes / Hint drive the AI self-heal path, so they must surface
+	// only the single scope the current identity can obtain.
+	wantScope := meetingQueryUserScope
+	otherScope := meetingQueryBotScope
+	if identity.IsBot() {
+		wantScope = meetingQueryBotScope
+		otherScope = meetingQueryUserScope
 	}
-	if !strings.Contains(pe.Error(), strings.Join(meetingQueryAnyScopes, ", ")) {
-		t.Fatalf("error %q does not mention meeting query scopes %v", pe.Error(), meetingQueryAnyScopes)
+	if !reflect.DeepEqual(pe.MissingScopes, []string{wantScope}) {
+		t.Fatalf("MissingScopes = %v, want %v", pe.MissingScopes, []string{wantScope})
 	}
 	if !strings.Contains(pe.Hint, "auth login --scope") {
 		t.Fatalf("Hint = %q, want auth login guidance", pe.Hint)
 	}
-	if !strings.Contains(pe.Hint, meetingQueryUserScope) || !strings.Contains(pe.Hint, meetingQueryBotScope) {
-		t.Fatalf("Hint = %q, want both accepted meeting query scopes", pe.Hint)
+	if !strings.Contains(pe.Hint, wantScope) {
+		t.Fatalf("Hint = %q, want recommended scope %q", pe.Hint, wantScope)
+	}
+	if strings.Contains(pe.Hint, otherScope) {
+		t.Fatalf("Hint = %q, must not steer %s identity toward %q", pe.Hint, identity, otherScope)
+	}
+	// The human-readable message still explains that either scope is accepted.
+	if !strings.Contains(pe.Error(), strings.Join(meetingQueryAnyScopes, ", ")) {
+		t.Fatalf("error %q does not mention meeting query scopes %v", pe.Error(), meetingQueryAnyScopes)
 	}
 }
 

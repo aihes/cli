@@ -13,12 +13,12 @@
 
 ## 权限建议
 
-本命令当前按身份声明不同权限：
+服务端按身份接受不同 scope；本地只做 OR 兜底预检（任一 scope 存在即放行，最终是否有权限以服务端为准）。因此按身份申请对应 scope 即可：
 
-| 场景 | 推荐权限 |
-|------|----------|
-| UAT / 用户身份 `--as user` | `vc:meeting.meetingevent:read` |
-| TAT / 应用身份 `--as bot` | 推荐申请 `vc:meeting.bot.join:write` |
+| 身份 | 推荐 scope |
+|------|-----------|
+| 用户身份 `--as user` | `vc:meeting.meetingevent:read` |
+| 应用身份 `--as bot` | `vc:meeting.bot.join:write` |
 
 ## 命令
 

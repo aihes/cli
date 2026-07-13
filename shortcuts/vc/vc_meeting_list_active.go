@@ -23,9 +23,15 @@ var VCMeetingListActive = common.Shortcut{
 	Command:     "+meeting-list-active",
 	Description: "List active meetings for the current identity or target user",
 	Risk:        "read",
-	Scopes:      []string{},
-	AuthTypes:   []string{"user", "bot"},
-	HasFormat:   true,
+	// Scopes stays empty so the framework AND preflight never fires; the OR
+	// check lives in Validate. ConditionalUserScopes/BotScopes only feed
+	// metadata (auth login --domain vc, hints, diagnostics), matching the
+	// scope each identity can actually obtain.
+	Scopes:                []string{},
+	ConditionalUserScopes: []string{meetingQueryUserScope},
+	ConditionalBotScopes:  []string{meetingQueryBotScope},
+	AuthTypes:             []string{"user", "bot"},
+	HasFormat:             true,
 	Flags: []common.Flag{
 		{Name: "user-id", Desc: "target user ID when using bot identity"},
 	},

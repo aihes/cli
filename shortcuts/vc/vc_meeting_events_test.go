@@ -425,6 +425,12 @@ func TestMeetingEvents_UsesCustomAnyScopeCheck(t *testing.T) {
 	if got := VCMeetingEvents.ScopesForIdentity("bot"); len(got) != 0 {
 		t.Fatalf("ScopesForIdentity(bot) = %v, want no framework AND preflight scopes", got)
 	}
+	if got := VCMeetingEvents.DeclaredScopesForIdentity("user"); !reflect.DeepEqual(got, []string{meetingQueryUserScope}) {
+		t.Fatalf("DeclaredScopesForIdentity(user) = %v, want %v", got, []string{meetingQueryUserScope})
+	}
+	if got := VCMeetingEvents.DeclaredScopesForIdentity("bot"); !reflect.DeepEqual(got, []string{meetingQueryBotScope}) {
+		t.Fatalf("DeclaredScopesForIdentity(bot) = %v, want %v", got, []string{meetingQueryBotScope})
+	}
 	if !hasAnyGrantedScope("vc:meeting.meetingevent:read", meetingQueryAnyScopes) {
 		t.Fatal("meetingevent scope should satisfy meeting query OR scope check")
 	}

@@ -57,13 +57,23 @@ func checkMeetingQueryAnyScope(ctx context.Context, runtime *common.RuntimeConte
 	if hasAnyGrantedScope(result.Scopes, meetingQueryAnyScopes) {
 		return nil
 	}
+	// The APIs accept either scope, but they are granted per identity: a user
+	// token carries vc:meeting.meetingevent:read, the bot flow carries
+	// vc:meeting.bot.join:write. missing_scopes / Hint feed the AI self-heal
+	// path (auth login --scope ...), so only surface the scope the current
+	// identity can actually obtain; reporting both would send a user identity
+	// after the bot-only scope and dead-end the retry.
+	recommended := meetingQueryUserScope
+	if runtime.As().IsBot() {
+		recommended = meetingQueryBotScope
+	}
 	return errs.NewPermissionError(
 		errs.SubtypeMissingScope,
 		"missing one of required scope(s): %s",
 		strings.Join(meetingQueryAnyScopes, ", "),
 	).
-		WithHint("run `lark-cli auth login --scope %q` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login.", strings.Join(meetingQueryAnyScopes, " ")).
-		WithMissingScopes(meetingQueryAnyScopes...).
+		WithHint("run `lark-cli auth login --scope %q` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login.", recommended).
+		WithMissingScopes(recommended).
 		WithIdentity(string(runtime.As()))
 }
 

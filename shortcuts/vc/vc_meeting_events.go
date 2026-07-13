@@ -52,9 +52,15 @@ var VCMeetingEvents = common.Shortcut{
 	Command:     "+meeting-events",
 	Description: "List meeting events by meeting ID",
 	Risk:        "read",
-	Scopes:      []string{},
-	AuthTypes:   []string{"user", "bot"},
-	HasFormat:   true,
+	// Scopes stays empty so the framework AND preflight never fires; the OR
+	// check lives in Validate. ConditionalUserScopes/BotScopes only feed
+	// metadata (auth login --domain vc, hints, diagnostics), matching the
+	// scope each identity can actually obtain.
+	Scopes:                []string{},
+	ConditionalUserScopes: []string{meetingQueryUserScope},
+	ConditionalBotScopes:  []string{meetingQueryBotScope},
+	AuthTypes:             []string{"user", "bot"},
+	HasFormat:             true,
 	Flags: []common.Flag{
 		{Name: "meeting-id", Required: true, Desc: "meeting ID to query"},
 		{Name: "start", Desc: "time lower bound (ISO 8601, YYYY-MM-DD, or Unix seconds)"},
