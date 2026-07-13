@@ -6,13 +6,13 @@ package env
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/larksuite/cli/extension/credential"
 	"github.com/larksuite/cli/internal/envvars"
-	"github.com/larksuite/cli/internal/vfs"
 )
 
 func TestProvider_Name(t *testing.T) {
@@ -396,7 +396,7 @@ func TestResolveAccount_InvalidDefaultAsRejected(t *testing.T) {
 func writeEnvFile(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
-	if err := vfs.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return path
