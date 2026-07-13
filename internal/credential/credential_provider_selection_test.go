@@ -172,11 +172,10 @@ func TestSelection_ConfigDefaultBrokenSecret_ProfileSecretInvalid(t *testing.T) 
 	assertNoSecretLeak(t, "config-default-broken", ce.Message, ce.Hint, ce.AppID)
 }
 
-// Explicit profile requested but the config file is malformed. The load error
-// must be propagated (errors.Is ErrMalformedConfig) rather than masked as
-// profile_not_found, which would hide a real config problem and misdirect the
-// user to `profile list`. An absent config is separately still profile_not_found.
-func TestSelection_ExplicitProfile_MalformedConfig_PropagatesError(t *testing.T) {
+// writeMalformedConfig points the config dir at a temp file containing invalid
+// JSON, with no direct-credential env set.
+func writeMalformedConfig(t *testing.T) {
+	t.Helper()
 	t.Setenv(envvars.CliAppID, "")
 	t.Setenv(envvars.CliAppSecret, "")
 	t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
@@ -186,18 +185,46 @@ func TestSelection_ExplicitProfile_MalformedConfig_PropagatesError(t *testing.T)
 	if err := os.WriteFile(core.GetConfigPath(), []byte("{ this is not valid json"), 0o600); err != nil {
 		t.Fatalf("write malformed config: %v", err)
 	}
-	cp := newProvider(t, "tenant_a", true)
+}
 
-	_, err := cp.Selection(context.Background())
+// assertMalformedSurfaced requires the malformed config to surface as the typed
+// invalid_config subtype — never masked (as profile_not_found on the explicit
+// path, or no_active_profile on the config-default path), which would hide a
+// broken file and misdirect the user (e.g. to `config init`, risking overwrite
+// of a recoverable config).
+func assertMalformedSurfaced(t *testing.T, err error) {
+	t.Helper()
 	if err == nil {
 		t.Fatalf("expected error for malformed config, got nil")
 	}
-	if !errors.Is(err, core.ErrMalformedConfig) {
-		t.Fatalf("malformed config error not propagated: %v", err)
+	prob, ok := errs.ProblemOf(err)
+	if !ok {
+		t.Fatalf("malformed config error is not typed: %v", err)
 	}
-	if prob, ok := errs.ProblemOf(err); ok && prob.Subtype == errs.SubtypeProfileNotFound {
-		t.Fatalf("malformed config masked as profile_not_found")
+	if prob.Subtype != errs.SubtypeInvalidConfig {
+		t.Fatalf("malformed config subtype = %q, want invalid_config (not masked)", prob.Subtype)
 	}
+}
+
+// Explicit profile + malformed config → invalid_config, not profile_not_found.
+func TestSelection_ExplicitProfile_MalformedConfig_PropagatesError(t *testing.T) {
+	writeMalformedConfig(t)
+	cp := newProvider(t, "tenant_a", true)
+
+	_, err := cp.Selection(context.Background())
+	assertMalformedSurfaced(t, err)
+}
+
+// Config-default path (no profile) + malformed config → invalid_config, not
+// no_active_profile. Both paths route through core.LoadOrNotConfigured so a
+// temporarily broken config is never misreported as "no active profile, run
+// config init".
+func TestSelection_ConfigDefault_MalformedConfig_PropagatesError(t *testing.T) {
+	writeMalformedConfig(t)
+	cp := newProvider(t, "", false)
+
+	_, err := cp.Selection(context.Background())
+	assertMalformedSurfaced(t, err)
 }
 
 // State #3: P none, E partial (only APP_ID) -> app_credential_incomplete.

@@ -263,18 +263,21 @@ func (p *CredentialProvider) doResolveAccount(ctx context.Context) (*Account, er
 
 	// Step 2 (spec §3): an explicit profile was requested.
 	if p.profile != "" {
-		multi, loadErr := core.LoadMultiAppConfig()
-		if errors.Is(loadErr, core.ErrMalformedConfig) {
-			// A malformed config must not be masked as profile_not_found (which
-			// would tell the user to run `profile list` and hide a real config
-			// problem). Pass the underlying error through unchanged so
-			// errors.Is / errors.Unwrap keep working. An absent config is not
-			// malformed and still falls through to the friendly
-			// profile_not_found below, since the requested profile cannot exist.
-			return nil, loadErr
+		multi, loadErr := core.LoadOrNotConfigured()
+		if loadErr != nil {
+			// A malformed / unreadable config must surface its real (typed)
+			// cause — invalid_config — not be masked as profile_not_found (which
+			// would send the user to `profile list` and hide a broken file).
+			// Only a genuinely absent config (not_configured) falls through to
+			// the friendly profile_not_found, since the requested profile
+			// cannot exist. This mirrors the config-default path.
+			if prob, ok := errs.ProblemOf(loadErr); !ok || prob.Subtype != errs.SubtypeNotConfigured {
+				return nil, loadErr
+			}
+			multi = nil
 		}
 		var app *core.AppConfig
-		if loadErr == nil && multi != nil {
+		if multi != nil {
 			app = multi.FindApp(p.profile)
 		}
 		if app == nil {
