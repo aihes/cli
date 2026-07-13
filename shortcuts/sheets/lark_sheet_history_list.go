@@ -21,11 +21,6 @@ import (
 // History is workbook-level (no sheet selector), mirroring +workbook-info:
 // the only locator is --url / --spreadsheet-token (XOR), with --token accepted
 // as a parse-time alias for --spreadsheet-token via the shared PostMount hook.
-//
-// Flags are declared inline here rather than via flagsFor(): the generated
-// flag_defs_gen.go / data/flag-defs.json are synced from sheet-skill-spec
-// (BE-3) and must not be hand-edited, so this hand-written shortcut owns its
-// own flag set. The two locator flags match +workbook-info's shape exactly.
 
 // historyLocatorFlags is the --url / --spreadsheet-token XOR locator pair
 // shared by the three history shortcuts. Mirrors +workbook-info's flag-defs

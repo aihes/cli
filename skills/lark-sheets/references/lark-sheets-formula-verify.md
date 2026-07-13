@@ -38,9 +38,9 @@
 
 任何批量公式 / 含公式列写入完成后调用 `+formula-verify` 直到 `status='success'` 才能交付。不要等用户显式说"校验一下公式"才想到这里；**只要任务动作包含写公式，这一步默认就该做**。触发场景：
 
-- `+cells-set` / `+cells-csv-set`
+- `+cells-set` / `+csv-put`
 - `+cells-set --copy-to-range` / 模板单元格向整列或整块扩展公式
-- `+sandbox-import`
+- `+workbook-import`
 - `+batch-update` 中含写入子操作
 - `+table-put`（任意列含公式时）
 - `+workbook-import`（导入的 xlsx 含公式时）

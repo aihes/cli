@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/larksuite/cli/internal/validate"
 	"github.com/larksuite/cli/shortcuts/common"
 )
 
@@ -28,27 +29,9 @@ import (
 // which surfaces here as a normal tool error. These CLI shortcuts are correct
 // thin wrappers and will work end-to-end once the backend follow-up lands —
 // this is NOT a CLI blocker. See self_check.md.
-//
-// Flags are declared inline (historyLocatorFlags + history-version-id) rather
-// than via flagsFor(), because flag_defs_gen.go / data/flag-defs.json are
-// synced from sheet-skill-spec (BE-3) and must not be hand-edited.
-
-// historyVersionIDFlag is the target-version selector shared by +history-revert.
-// Required at the cli surface (cobra MarkFlagRequired): a missing value yields
-// cobra's standard "required flag(s) \"history-version-id\" not set" message
-// before Validate runs. We still trim + reject control-chars in Validate to
-// reject empty strings ("--history-version-id "" "), which cobra accepts.
-func historyVersionIDFlag() common.Flag {
-	return common.Flag{
-		Name:     "history-version-id",
-		Type:     "string",
-		Required: true,
-		Desc:     "History version to act on (from +history-list).",
-	}
-}
 
 func historyRevertFlags() []common.Flag {
-	return append(historyLocatorFlags(), historyVersionIDFlag())
+	return flagsFor("+history-revert")
 }
 
 // validateHistoryVersionID enforces the required, control-char-clean
@@ -57,6 +40,9 @@ func validateHistoryVersionID(runtime *common.RuntimeContext) (string, error) {
 	id := strings.TrimSpace(runtime.Str("history-version-id"))
 	if id == "" {
 		return "", sheetsValidationForFlag("history-version-id", "--history-version-id is required")
+	}
+	if err := validate.RejectControlChars(id, "--history-version-id"); err != nil {
+		return "", err
 	}
 	return id, nil
 }
@@ -68,24 +54,8 @@ func historyRevertInput(token, versionID string) map[string]interface{} {
 	}
 }
 
-// transactionIDFlag is the async-revert receipt selector used by
-// +history-revert-status: the transaction_id returned by +history-revert (NOT a
-// history version id — the facade-agg status tool keys on transaction_id).
-// Required at the cli surface (cobra MarkFlagRequired) — same gating model as
-// historyVersionIDFlag. Validate still trims + rejects empty/control-char
-// values to catch the case where cobra accepts --transaction-id with an
-// empty-string value.
-func transactionIDFlag() common.Flag {
-	return common.Flag{
-		Name:     "transaction-id",
-		Type:     "string",
-		Required: true,
-		Desc:     "Async revert transaction id (from +history-revert).",
-	}
-}
-
 func historyRevertStatusFlags() []common.Flag {
-	return append(historyLocatorFlags(), transactionIDFlag())
+	return flagsFor("+history-revert-status")
 }
 
 // validateTransactionID enforces the required, trimmed --transaction-id and
@@ -94,6 +64,9 @@ func validateTransactionID(runtime *common.RuntimeContext) (string, error) {
 	id := strings.TrimSpace(runtime.Str("transaction-id"))
 	if id == "" {
 		return "", sheetsValidationForFlag("transaction-id", "--transaction-id is required")
+	}
+	if err := validate.RejectControlChars(id, "--transaction-id"); err != nil {
+		return "", err
 	}
 	return id, nil
 }

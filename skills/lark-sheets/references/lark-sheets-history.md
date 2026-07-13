@@ -4,7 +4,7 @@
 
 每张飞书电子表格保留一串历史版本（`minor_histories`）。每个版本由 `history_version_id` 标识，并附带创建时间（`create_time`）、动作（`action`）与块修订信息（`all_block_revision`）。历史是**工作簿级**的（针对整张电子表格，不针对单个子表）。
 
-回滚（revert）把电子表格的当前内容覆盖回某个历史版本——这是一个**写入 / 不可逆**操作，且为**异步**：发起后立即返回受理标识，真正的回滚在后台进行，需通过状态查询轮询最终结果（进行中 / 成功 / 失败）。
+回滚（revert）把电子表格的当前内容覆盖回某个历史版本——这是一个**高风险写入**操作，且为**异步**：发起后立即返回受理标识，真正的回滚在后台进行，需通过状态查询轮询最终结果（进行中 / 成功 / 失败）。
 
 `+history-list` 读取版本列表以挑选目标；`+history-revert` 发起回滚；`+history-revert-status` 轮询回滚结果。若只是想拿**当前文档版本号（revision）**当作 recover / undo / `+changeset-get` 的起点锚点，直接用 `+revision-get` 更轻量。
 
@@ -21,7 +21,7 @@
 典型工作流：`+history-list` 拿到目标版本的 `history_version_id`（必要时翻页拉取更早历史）→ `+history-revert` 发起回滚并取回 `transaction_id` → `+history-revert-status --transaction-id <transaction_id>` 轮询直到成功或失败。
 
 **注意事项（必须了解）**：
-- **回滚是写入 / 不可逆操作**：会用历史版本内容覆盖当前表格，发起前请确认目标 `history_version_id` 正确。
+- **回滚是高风险写入操作**：会用历史版本内容覆盖当前表格，执行前应明确告知用户影响。
 - **回滚是异步的**：`+history-revert` 返回的是 `transaction_id`（受理标识），不代表回滚已完成；必须用 `+history-revert-status --transaction-id <transaction_id>` 确认最终结果。
 - **`history_version_id` 与 `transaction_id` 不是同一个**：`history_version_id` 用于 `+history-revert`（取自 `+history-list`）；`transaction_id` 用于 `+history-revert-status`（取自 `+history-revert` 的输出）。
 - **历史是工作簿级**：定位只需 `--url` / `--spreadsheet-token`（XOR），不需要子表选择器。
