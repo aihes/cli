@@ -31,7 +31,7 @@ var drivePermissionGetSettingURLPathToType = []struct {
 }{
 	{"/drive/folder/", "folder"},
 	{"/docx/", "docx"},
-	{"/doc/", "doc"},
+	{"/docs/", "doc"},
 	{"/sheets/", "sheet"},
 	{"/base/", "bitable"},
 	{"/bitable/", "bitable"},
