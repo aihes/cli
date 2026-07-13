@@ -50,7 +50,7 @@ func (p *Provider) ResolveAccount(ctx context.Context) (*credential.Account, err
 		}
 	}
 	if appID == "" {
-		return nil, &credential.BlockError{Provider: "env", Reason: envvars.CliAppSecret + " is set but " + envvars.CliAppID + " is missing"}
+		return nil, &credential.BlockError{Provider: "env", Reason: envvars.CliAppSecret + " is set but " + tokenName(envvars.CliAppID, envvars.CliAppIDFile) + " is missing"}
 	}
 	if appSecret == "" && !hasUAT && !hasTAT {
 		return nil, &credential.BlockError{
@@ -151,12 +151,16 @@ func readCredentialValue(envKey, fileEnvKey string) (string, string, error) {
 	if err != nil {
 		return "", "", &credential.BlockError{Provider: "env", Reason: err.Error()}
 	}
+	info, err := vfs.Stat(safePath)
+	if err != nil {
+		return "", "", &credential.BlockError{Provider: "env", Reason: "cannot stat " + fileEnvKey + ": " + err.Error()}
+	}
+	if info.Size() > maxCredentialFileBytes {
+		return "", "", &credential.BlockError{Provider: "env", Reason: fileEnvKey + " file is too large"}
+	}
 	data, err := vfs.ReadFile(safePath)
 	if err != nil {
 		return "", "", &credential.BlockError{Provider: "env", Reason: "cannot read " + fileEnvKey + ": " + err.Error()}
-	}
-	if len(data) > maxCredentialFileBytes {
-		return "", "", &credential.BlockError{Provider: "env", Reason: fileEnvKey + " file is too large"}
 	}
 	value := strings.TrimSpace(string(data))
 	if value == "" {
