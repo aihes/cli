@@ -22,7 +22,6 @@ type slidesHistoryListSpec struct {
 
 type slidesHistoryRevertSpec struct {
 	HistoryVersionID string
-	WaitTimeoutMs    int
 }
 
 type slidesHistoryRevertStatusSpec struct {
@@ -57,13 +56,6 @@ func validateSlidesHistoryVersionID(historyVersionID string) error {
 	return nil
 }
 
-func validateSlidesHistoryWaitTimeout(timeoutMs int) error {
-	if timeoutMs < 0 || timeoutMs > 30000 {
-		return errs.NewValidationError(errs.SubtypeInvalidArgument, "invalid --wait-timeout-ms %d: must be between 0 and 30000", timeoutMs).WithParam("--wait-timeout-ms")
-	}
-	return nil
-}
-
 func slidesHistoryListParams(spec slidesHistoryListSpec) map[string]interface{} {
 	params := map[string]interface{}{
 		"page_size": spec.PageSize,
@@ -77,7 +69,6 @@ func slidesHistoryListParams(spec slidesHistoryListSpec) map[string]interface{} 
 func slidesHistoryRevertBody(spec slidesHistoryRevertSpec) map[string]interface{} {
 	return map[string]interface{}{
 		"history_version_id": spec.HistoryVersionID,
-		"wait_timeout_ms":    spec.WaitTimeoutMs,
 	}
 }
 
@@ -181,7 +172,6 @@ var SlidesHistoryRevert = common.Shortcut{
 	Flags: []common.Flag{
 		{Name: "presentation", Desc: "xml_presentation_id, slides URL, or wiki URL that resolves to slides", Required: true},
 		{Name: "history-version-id", Desc: "history_version_id from slides +history-list to revert to", Required: true},
-		{Name: "wait-timeout-ms", Type: "int", Default: "30000", Desc: "milliseconds to wait for revert completion before returning, range 0-30000"},
 	},
 	Validate: func(ctx context.Context, runtime *common.RuntimeContext) error {
 		if _, err := parseSlidesHistoryPresentation(runtime); err != nil {
@@ -190,7 +180,7 @@ var SlidesHistoryRevert = common.Shortcut{
 		if err := validateSlidesHistoryVersionID(runtime.Str("history-version-id")); err != nil {
 			return err
 		}
-		return validateSlidesHistoryWaitTimeout(runtime.Int("wait-timeout-ms"))
+		return nil
 	},
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
 		ref, err := parsePresentationRef(runtime.Str("presentation"))
@@ -199,7 +189,6 @@ var SlidesHistoryRevert = common.Shortcut{
 		}
 		spec := slidesHistoryRevertSpec{
 			HistoryVersionID: strings.TrimSpace(runtime.Str("history-version-id")),
-			WaitTimeoutMs:    runtime.Int("wait-timeout-ms"),
 		}
 		dry, presentationID := newSlidesHistoryDryRun(ref, "revert Slides history")
 		return dry.
@@ -218,7 +207,6 @@ var SlidesHistoryRevert = common.Shortcut{
 		}
 		spec := slidesHistoryRevertSpec{
 			HistoryVersionID: strings.TrimSpace(runtime.Str("history-version-id")),
-			WaitTimeoutMs:    runtime.Int("wait-timeout-ms"),
 		}
 
 		data, err := runtime.CallAPITyped(

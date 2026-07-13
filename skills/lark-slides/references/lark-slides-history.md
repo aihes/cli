@@ -7,9 +7,10 @@
 1. 先用分页接口 `+history-list` 找到目标版本的 `history_version_id`。
 2. 如果用户指定的是 `revision_id`，不要假设它唯一，也不要把 `revision_id` 直接传给 `+history-revert`。先拉一页并在 `entries[]` 中筛选 `revision_id` 相同的候选；如果未匹配到且 `has_more=true`，继续用 `page_token` 翻页；如果已匹配到候选，最多额外再拉一页补齐可能跨页的相邻候选。最终优先根据用户目标时间与 `edit_time` 的接近程度选择最合适的一条，取同一条的 `history_version_id`；如果没有目标时间，或多个候选无法可靠区分，再向用户展示候选版本（`history_version_id`、`revision_id`、`edit_time`、`name/description`）并确认后回滚。
 3. 如果用户指定的是某一时刻但没有指定 `revision_id`，按 `entries[].edit_time` 匹配；优先选择不晚于目标时刻的最近一条历史记录，无法明确匹配时先向用户确认候选版本。
-4. 再用 `+history-revert --history-version-id <history_version_id>` 发起回滚。默认最多等待 30 秒；如果返回 `status: running`，记录 `task_id`。
-5. 用 `+history-revert-status` 轮询 `task_id`，直到状态不再是 `running`。
-6. 回滚完成后，用 `slides +xml-get` 或 `slides xml_presentations get` 读取演示文稿确认内容。
+4. 使用 `+history-revert` 发起回滚。接口会立即返回 `task_id`，回滚任务在服务端异步执行。
+5. 如果返回 `status: running`，保存 `task_id`，按照返回的 `poll_after_ms` 等待后调用 `+history-revert-status`。任务创建成功后，不得因为状态查询失败而重新发起回滚。
+6. 状态变为 `done`、`partial_failed` 或 `failed` 后停止轮询；达到整体轮询上限时也停止轮询，并向用户返回 `task_id` 和当前状态。
+7. 回滚完成后，用 `slides +xml-get` 或 `slides xml_presentations get` 读取演示文稿确认内容。
 
 ## 按 revision_id 或时间点回滚
 
@@ -38,11 +39,8 @@ lark-cli slides +history-list --presentation "<slides_url_or_token>" --page-size
 # 翻页
 lark-cli slides +history-list --presentation "<slides_url_or_token>" --page-size 20 --page-token "<page_token>"
 
-# 回滚到指定 history_version_id（默认等待 30000ms）
+# 发起回滚任务，立即返回 task_id
 lark-cli slides +history-revert --presentation "<slides_url_or_token>" --history-version-id 42
-
-# 只发起任务，不等待
-lark-cli slides +history-revert --presentation "<slides_url_or_token>" --history-version-id 42 --wait-timeout-ms 0
 
 # 查询回滚任务状态
 lark-cli slides +history-revert-status --presentation "<slides_url_or_token>" --task-id "<task_id>"
@@ -57,9 +55,19 @@ lark-cli slides +history-revert-status --presentation "<slides_url_or_token>" --
 | `+history-list` | `--page-token` | 否 | 上一页返回的 `page_token` |
 | `+history-revert` | `--presentation` | 是 | 同一个演示文稿 |
 | `+history-revert` | `--history-version-id` | 是 | `+history-list` 返回的 `history_version_id`，必须大于 0 |
-| `+history-revert` | `--wait-timeout-ms` | 否 | 等待回滚完成的毫秒数，范围 `0-30000`，默认 `30000` |
 | `+history-revert-status` | `--presentation` | 是 | 同一个演示文稿 |
 | `+history-revert-status` | `--task-id` | 是 | `+history-revert` 返回的 `task_id` |
+
+## 异步轮询策略
+
+1. `+history-revert` 返回 `task_id` 后，认为回滚任务已经成功创建。
+2. 如果 `status` 不是 `running`，不再调用状态接口。
+3. 如果 `status` 是 `running`，等待响应中的 `poll_after_ms` 后调用 `+history-revert-status`；`poll_after_ms` 缺失、为 `0` 或非法时，默认等待 10 秒。
+4. 状态查询返回 `running` 时继续轮询；返回 `done`、`partial_failed` 或 `failed` 时停止。
+5. 除非用户另有要求，默认最多轮询 5 分钟。达到上限后停止轮询，向用户说明任务仍在运行并返回 `task_id`，不得将其描述为回滚失败。
+6. 状态查询出现临时错误时，按相同间隔最多连续重试 3 次；只重试 `+history-revert-status`，不得重新调用 `+history-revert`。
+7. `done` 后读取当前演示文稿内容进行验证。
+8. `partial_failed` 或 `failed` 时展示 `failed_block_tokens`；除非用户明确确认，不得自动再次发起回滚。
 
 ## 返回值要点
 

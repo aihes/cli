@@ -90,12 +90,6 @@ func TestSlidesHistoryValidation(t *testing.T) {
 			param:    "--history-version-id",
 		},
 		{
-			name:     "revert rejects invalid wait timeout",
-			shortcut: SlidesHistoryRevert,
-			args:     []string{"+history-revert", "--presentation", "presHistory", "--history-version-id", "10", "--wait-timeout-ms", "30001", "--as", "bot"},
-			param:    "--wait-timeout-ms",
-		},
-		{
 			name:     "status rejects empty task id",
 			shortcut: SlidesHistoryRevertStatus,
 			args:     []string{"+history-revert-status", "--presentation", "presHistory", "--task-id", "", "--as", "bot"},
@@ -149,7 +143,6 @@ func TestSlidesHistoryDryRun(t *testing.T) {
 	revertCmd := newSlidesHistoryRuntimeCmd(t, SlidesHistoryRevert, map[string]string{
 		"presentation":       "presHistoryDryRun",
 		"history-version-id": "42",
-		"wait-timeout-ms":    "30000",
 	})
 	revertDry := decodeSlidesHistoryDryRun(t, SlidesHistoryRevert.DryRun(context.Background(), common.TestNewRuntimeContext(revertCmd, nil)))
 	if got, want := revertDry.API[0].URL, "/open-apis/slides_ai/v1/xml_presentations/presHistoryDryRun/history/revert"; got != want {
@@ -158,8 +151,8 @@ func TestSlidesHistoryDryRun(t *testing.T) {
 	if got := revertDry.API[0].Body["history_version_id"]; got != "42" {
 		t.Fatalf("revert history_version_id = %#v, want 42", got)
 	}
-	if got := int(revertDry.API[0].Body["wait_timeout_ms"].(float64)); got != 30000 {
-		t.Fatalf("revert wait_timeout_ms = %d, want 30000", got)
+	if _, ok := revertDry.API[0].Body["wait_timeout_ms"]; ok {
+		t.Fatal("revert body must not contain wait_timeout_ms")
 	}
 
 	statusCmd := newSlidesHistoryRuntimeCmd(t, SlidesHistoryRevertStatus, map[string]string{
@@ -275,7 +268,6 @@ func TestSlidesHistoryExecuteRevert(t *testing.T) {
 		"+history-revert",
 		"--presentation", "presHistory",
 		"--history-version-id", "42",
-		"--wait-timeout-ms", "0",
 		"--as", "bot",
 	})
 	if err != nil {
@@ -289,8 +281,8 @@ func TestSlidesHistoryExecuteRevert(t *testing.T) {
 	if got := body["history_version_id"]; got != "42" {
 		t.Fatalf("history_version_id = %#v, want 42", got)
 	}
-	if got := int(body["wait_timeout_ms"].(float64)); got != 0 {
-		t.Fatalf("wait_timeout_ms = %d, want 0", got)
+	if _, ok := body["wait_timeout_ms"]; ok {
+		t.Fatal("revert body must not contain wait_timeout_ms")
 	}
 
 	data := decodeSlidesHistoryEnvelope(t, stdout)
